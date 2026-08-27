@@ -1,0 +1,150 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+/* ============================================================================
+   Sentinel Design System
+   Source of truth: Sentinel-Frontend-PRD.md, Section 2 (Visual Design System)
+   ============================================================================ */
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* Radius scale (PRD 2.3) */
+  --radius-sm: 8px;   /* buttons, badges, chips */
+  --radius-md: 10px;  /* cards, panels, inputs */
+  --radius-full: 999px; /* pills */
+
+  /* Brand accent (PRD 2.1) */
+  --color-brand-dark: #5b5fef;
+  --color-brand-light: #4338ca;
+
+  /* Semantic status colors (PRD 2.1) — identical in both themes, these are
+     the one set of colors that never shift with theme since their meaning
+     (online/offline/unknown/etc.) must stay instantly recognizable. */
+  --color-status-online: #22c55e;
+  --color-status-online-bg: #22c55e1a;
+  --color-status-offline: #ef4444;
+  --color-status-offline-bg: #ef44441a;
+  --color-status-unknown: #f59e0b;
+  --color-status-unknown-bg: #f59e0b1a;
+  --color-status-neutral: #64748b;
+  --color-status-neutral-bg: #64748b1a;
+  --color-status-ai: #a855f7;
+  --color-status-ai-bg: #a855f71a;
+
+  /* Animation durations (PRD 2.5) */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ----------------------------------------------------------------------------
+   Theme tokens: dark is the default (PRD 2.1 — "dark-first, high-contrast
+   operational palette"), light is a first-class alternative, not an
+   afterthought. Both are defined as CSS custom properties consumed by
+   Tailwind's arbitrary-value / bg-[var(--x)] usage and by component classes
+   below, so no component needs a `dark:` variant sprinkled everywhere —
+   swapping the `data-theme` attribute on <html> repaints the whole app.
+   ---------------------------------------------------------------------------- */
+
+:root,
+[data-theme="dark"] {
+  --bg-canvas: #0a0b0d;
+  --bg-surface: #111318;
+  --bg-surface-raised: #181b21;
+  --bg-surface-sunken: #1f232b;
+  --border-default: #242832;
+  --border-strong: #2e3440;
+  --text-primary: #f4f5f7;
+  --text-secondary: #8b93a1;
+  --color-brand: var(--color-brand-dark);
+  --color-brand-soft: rgba(91, 95, 239, 0.16);
+  --color-brand-border: rgba(91, 95, 239, 0.42);
+  --shadow-float: 0 4px 24px rgba(0, 0, 0, 0.36);
+  --bg-glass: rgba(17, 19, 24, 0.82);
+}
+
+[data-theme="light"] {
+  --bg-canvas: #fafaf9;
+  --bg-surface: #ffffff;
+  --bg-surface-raised: #ffffff;
+  --bg-surface-sunken: #f4f4f2;
+  --border-default: #e5e7eb;
+  --border-strong: #d8dbe0;
+  --text-primary: #0f1115;
+  --text-secondary: #6b7280;
+  --color-brand: var(--color-brand-light);
+  --color-brand-soft: rgba(67, 56, 202, 0.09);
+  --color-brand-border: rgba(67, 56, 202, 0.3);
+  --shadow-float: 0 4px 20px rgba(15, 17, 21, 0.09);
+  --bg-glass: rgba(255, 255, 255, 0.86);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --bg-canvas: #fafaf9;
+    --bg-surface: #ffffff;
+    --bg-surface-raised: #ffffff;
+    --bg-surface-sunken: #f4f4f2;
+    --border-default: #e5e7eb;
+    --border-strong: #d8dbe0;
+    --text-primary: #0f1115;
+    --text-secondary: #6b7280;
+    --color-brand: var(--color-brand-light);
+    --color-brand-soft: rgba(67, 56, 202, 0.09);
+    --color-brand-border: rgba(67, 56, 202, 0.3);
+    --shadow-float: 0 4px 20px rgba(15, 17, 21, 0.09);
+    --bg-glass: rgba(255, 255, 255, 0.86);
+  }
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Respect reduced-motion unconditionally (PRD 7 — Accessibility) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Tabular figures for monospace data columns (PRD 2.2) */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
+.animate-shake {
+  animation: shake 300ms ease-in-out;
+}
+
+@keyframes fade-in-0 {
+  from { opacity: 0; }
+}
+@keyframes zoom-in-95 {
+  from { transform: scale(0.95); }
+}
+.animate-in {
+  animation-fill-mode: both;
+}
+.fade-in-0 {
+  animation-name: fade-in-0;
+}
+.zoom-in-95 {
+  animation-name: zoom-in-95;
+}

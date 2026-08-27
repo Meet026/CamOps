@@ -1,0 +1,293 @@
+// ============================================================================
+// Model 1 — Prisma Schema
+// ============================================================================
+// This matches the tables already created in `sentinel_model1_db` via the
+// SQL setup script. You have two options:
+//
+//   OPTION A (recommended): Run `npx prisma db pull` against your existing
+//   database and let Prisma generate this file automatically — then compare
+//   the result against this file to sanity-check it matches what's expected.
+//
+//   OPTION B: Use this file directly, skip introspection, and instead run
+//   `npx prisma generate` only (since the tables already exist and match
+//   this schema, you don't need `migrate dev` for the very first setup).
+//
+// Either way, do NOT run `prisma migrate dev` as your first step against
+// this existing database — that would try to create tables that already
+// exist. Only use `migrate dev` for FUTURE schema changes from here on.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Department
+// ----------------------------------------------------------------------------
+model Department {
+  departmentId String   @id @default(dbgenerated("gen_random_uuid()")) @map("department_id") @db.Uuid
+  name         String
+  code         String   @unique
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  users   AppUser[]
+  cameras Camera[]
+  bulkUploadJobs BulkUploadJob[]
+
+  @@map("department")
+}
+
+// ----------------------------------------------------------------------------
+// App User
+// ----------------------------------------------------------------------------
+model AppUser {
+  userId       String   @id @default(dbgenerated("gen_random_uuid()")) @map("user_id") @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  // NOTE: introspected as String, not a Prisma enum — the actual constraint
+  // 'admin' | 'field_officer' | 'dept_viewer' | 'auditor' is enforced via a
+  // Postgres CHECK constraint, not a native enum type. Validate in DTOs.
+  role         String
+  departmentId String?  @map("department_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  department Department? @relation(fields: [departmentId], references: [departmentId])
+
+  camerasCreated       Camera[]              @relation("CameraCreatedBy")
+  verificationsDone    ScoringVerification[] @relation("VerifiedBy")
+  auditLogs            AuditLog[]
+  refreshTokens        RefreshToken[]
+  bulkUploadJobs       BulkUploadJob[]
+
+  @@map("app_user")
+}
+
+// ----------------------------------------------------------------------------
+// Refresh Token
+// ----------------------------------------------------------------------------
+// Enables short-lived (15 min) access tokens with a revocable 7-day refresh
+// flow. token_hash stores a hash of the refresh token (sha256/bcrypt) — never
+// the raw token — so a DB leak alone doesn't hand out valid sessions. Logout
+// or revocation = delete (or set revoked_at on) the row.
+model RefreshToken {
+  tokenId   String    @id @default(dbgenerated("gen_random_uuid()")) @map("token_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_token")
+}
+
+// ----------------------------------------------------------------------------
+// Camera (the core registry table)
+// ----------------------------------------------------------------------------
+model Camera {
+  cameraId     String   @id @default(dbgenerated("gen_random_uuid()")) @map("camera_id") @db.Uuid
+  departmentId String   @map("department_id") @db.Uuid
+  name         String
+
+  // PostGIS GEOGRAPHY(POINT, 4326) — Prisma cannot natively type this.
+  // Verified against a real `prisma db pull` run: introspects as
+  // Unsupported("geography") (the SRID/subtype is dropped from the Prisma
+  // type, though it's still enforced by Postgres). Do NOT query/write this
+  // field via standard Prisma calls — use prisma.$queryRaw / $executeRaw
+  // with ST_MakePoint / ST_SetSRID instead.
+  locationGeo Unsupported("geography") @map("location_geo")
+
+  addressText String? @map("address_text")
+
+  // NOTE: introspected as String — actual constraint: 'analog' | 'ip'
+  cameraType String @map("camera_type")
+
+  brand String?
+  model String?
+
+  // NOTE: introspected as String — actual constraint: 'yes' | 'no' | 'unknown'
+  onvifStatus String @default("unknown") @map("onvif_status")
+
+  // NOTE: introspected as String, nullable — actual constraint:
+  // 'lookup_table' | 'ai_guess' | 'user_confirmed' | null
+  onvifSource String? @map("onvif_source")
+
+  // NOTE: introspected as String — actual constraint:
+  // 'easy' | 'medium' | 'hard' | 'needs_verification'
+  integrationScore String @default("needs_verification") @map("integration_score")
+
+  // NOTE: introspected as String — actual constraint:
+  // 'verified_in_person' | 'verified_api' | 'self_reported'
+  dataConfidence String @default("self_reported") @map("data_confidence")
+
+  photoUrl String? @map("photo_url")
+
+  // Health-monitoring target — all nullable/optional. Most field officers
+  // won't know this at onboarding time; that's an expected, valid state
+  // (same philosophy as onvifStatus). If ipAddress is null, the health-check
+  // cron skips the camera and leaves currentStatus as 'unknown'. Model 1
+  // only does a basic TCP port reachability check — a full RTSP
+  // handshake/stream validation belongs to Model 2, not this service.
+  ipAddress  String? @map("ip_address") @db.Inet
+  rtspPort   Int?    @map("rtsp_port")
+  streamPath String? @map("stream_path")
+
+  // NOTE: introspected as String — actual constraint: 'online' | 'offline' | 'unknown'
+  currentStatus String @default("unknown") @map("current_status")
+
+  installedAt DateTime? @map("installed_at") @db.Date
+  isActive    Boolean   @default(true) @map("is_active")
+  createdBy   String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+
+  department Department @relation(fields: [departmentId], references: [departmentId])
+  creator    AppUser?    @relation("CameraCreatedBy", fields: [createdBy], references: [userId])
+
+  statusHistory  CameraStatusHistory[]
+  verifications  ScoringVerification[]
+
+  // Bulk-upload idempotency: re-uploading the same CSV should update the
+  // existing row for a given department+name pair rather than duplicate it.
+  @@unique([departmentId, name], map: "uq_camera_department_name")
+  @@index([departmentId], map: "idx_camera_department")
+  @@index([integrationScore], map: "idx_camera_integration_score")
+  @@index([isActive], map: "idx_camera_is_active")
+  // GIST spatial index — required for any fast map/distance/overlap query.
+  // Confirmed present in the live DB and correctly picked up by
+  // `prisma db pull` as `type: Gist`; was previously missing from this
+  // hand-written file even though the SQL script always created it.
+  @@index([locationGeo], map: "idx_camera_location", type: Gist)
+  @@map("camera")
+}
+
+// ----------------------------------------------------------------------------
+// Bulk Upload Job
+// ----------------------------------------------------------------------------
+// Tracks a CSV bulk-upload's background-processing state. Postgres is the
+// only durability layer for this job system — no external queue. A server
+// restart mid-job is not auto-recovered in v1.
+model BulkUploadJob {
+  jobId String @id @default(dbgenerated("gen_random_uuid()")) @map("job_id") @db.Uuid
+
+  // NOTE: introspected as String — actual constraint:
+  // 'pending' | 'processing' | 'completed' | 'failed'
+  status String @default("pending")
+
+  totalRows      Int @map("total_rows")
+  processedRows  Int @default(0) @map("processed_rows")
+  succeededCount Int @default(0) @map("succeeded_count")
+  failedCount    Int @default(0) @map("failed_count")
+
+  // Array of { row: number, error: string }, appended to as rows fail.
+  rowErrors Json? @map("row_errors")
+
+  createdBy       String? @map("created_by") @db.Uuid
+  departmentScope String? @map("department_scope") @db.Uuid
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  completedAt DateTime? @map("completed_at") @db.Timestamptz
+
+  creator    AppUser?    @relation(fields: [createdBy], references: [userId])
+  department Department? @relation(fields: [departmentScope], references: [departmentId])
+
+  @@index([createdBy, createdAt(sort: Desc)], map: "idx_bulk_upload_job_created_by")
+  @@map("bulk_upload_job")
+}
+
+// ----------------------------------------------------------------------------
+// Vendor Lookup (the curated ONVIF fast-path table)
+// ----------------------------------------------------------------------------
+model VendorLookup {
+  lookupId     String   @id @default(dbgenerated("gen_random_uuid()")) @map("lookup_id") @db.Uuid
+  brand        String
+  modelPattern String   @map("model_pattern")
+
+  // NOTE: introspected as String — actual constraint: 'yes' | 'no'
+  onvifStatus String @map("onvif_status")
+
+  sdkAvailable Boolean? @default(false) @map("sdk_available")
+
+  // NOTE: introspected as String, nullable — actual constraint:
+  // 'official_datasheet' | 'community' | 'ai_verified' | null
+  source String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([brand, modelPattern])
+  @@map("vendor_lookup")
+}
+
+// ----------------------------------------------------------------------------
+// Scoring Verification (pending AI guesses awaiting human confirmation)
+// ----------------------------------------------------------------------------
+model ScoringVerification {
+  verificationId    String    @id @default(dbgenerated("gen_random_uuid()")) @map("verification_id") @db.Uuid
+  cameraId          String    @map("camera_id") @db.Uuid
+  aiSuggestedOnvif  String?   @map("ai_suggested_onvif")
+  aiConfidenceNote  String?   @map("ai_confidence_note")
+  verifiedBy        String?   @map("verified_by") @db.Uuid
+  verifiedAt        DateTime? @map("verified_at") @db.Timestamptz
+  finalOnvifStatus  String?   @map("final_onvif_status")
+
+  // NOTE: introspected as String — actual constraint: 'pending' | 'confirmed' | 'rejected'
+  status String @default("pending")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  camera   Camera   @relation(fields: [cameraId], references: [cameraId])
+  verifier AppUser? @relation("VerifiedBy", fields: [verifiedBy], references: [userId])
+
+  @@index([status])
+  @@index([cameraId])
+  @@map("scoring_verification")
+}
+
+// ----------------------------------------------------------------------------
+// Camera Status History (health monitoring — optionally a TimescaleDB hypertable)
+// ----------------------------------------------------------------------------
+model CameraStatusHistory {
+  // Surrogate BIGSERIAL primary key. A composite (cameraId, checkedAt) key
+  // looked clean on paper, but two health checks landing in the same
+  // millisecond under concurrent cron execution isn't actually impossible —
+  // this one boring auto-increment column avoids that collision entirely.
+  id       BigInt @id @default(autoincrement())
+  cameraId String @map("camera_id") @db.Uuid
+
+  // NOTE: introspected as String — actual constraint: 'online' | 'offline'
+  status String
+
+  checkedAt      DateTime @default(now()) @map("checked_at") @db.Timestamptz
+  responseTimeMs Int?     @map("response_time_ms")
+
+  camera Camera @relation(fields: [cameraId], references: [cameraId])
+
+  @@index([cameraId, checkedAt(sort: Desc)])
+  @@map("camera_status_history")
+}
+
+// ----------------------------------------------------------------------------
+// Audit Log
+// ----------------------------------------------------------------------------
+model AuditLog {
+  auditId    String   @id @default(dbgenerated("gen_random_uuid()")) @map("audit_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id") @db.Uuid
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser? @relation(fields: [userId], references: [userId])
+
+  @@index([entityType, entityId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("audit_log")
+}
