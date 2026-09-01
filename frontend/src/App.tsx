@@ -19,6 +19,12 @@ const CameraFormPage = lazy(() => import('@/pages/cameras/CameraFormPage').then(
 const CameraDetailPage = lazy(() => import('@/pages/cameras/CameraDetailPage').then((m) => ({ default: m.CameraDetailPage })))
 const BulkUploadPage = lazy(() => import('@/pages/cameras/BulkUploadPage').then((m) => ({ default: m.BulkUploadPage })))
 const GisMapPage = lazy(() => import('@/pages/map/GisMapPage').then((m) => ({ default: m.GisMapPage })))
+const VehicleSearchPage = lazy(() =>
+  import('@/pages/vehicle-search/VehicleSearchPage').then((m) => ({ default: m.VehicleSearchPage })),
+)
+const VehicleSearchResultsPage = lazy(() =>
+  import('@/pages/vehicle-search/VehicleSearchResultsPage').then((m) => ({ default: m.VehicleSearchResultsPage })),
+)
 const ScoringQueuePage = lazy(() => import('@/pages/scoring/ScoringQueuePage').then((m) => ({ default: m.ScoringQueuePage })))
 const HealthDashboardPage = lazy(() => import('@/pages/health/HealthDashboardPage').then((m) => ({ default: m.HealthDashboardPage })))
 const AuditLogPage = lazy(() => import('@/pages/audit-log/AuditLogPage').then((m) => ({ default: m.AuditLogPage })))
@@ -83,6 +89,22 @@ function App() {
                     }
                   />
                   <Route path="/map" element={<GisMapPage />} />
+                  <Route
+                    path="/vehicle-search"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin', 'field_officer']}>
+                        <VehicleSearchPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/vehicle-search/results"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin', 'field_officer']}>
+                        <VehicleSearchResultsPage />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route
                     path="/scoring"
                     element={

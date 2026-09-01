@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { getApiErrorMessage, getApiErrorStatus } from '@/api/client'
 import * as usersApi from '@/api/users'
 import * as authApi from '@/api/auth'
+import * as vehiclesApi from '@/api/vehicles'
 import type { AppRole } from '@/types/api'
 
 const ROLE_LABEL: Record<AppRole, string> = {
@@ -119,6 +120,58 @@ function AccountSection() {
       </div>
 
       <ChangePasswordSection />
+      {user?.role === 'admin' && <VehicleSearchServiceCard />}
+    </div>
+  )
+}
+
+// Pixel-matched to the reference's admin-only "Vehicle search service"
+// card (can.audit-gated there — this codebase's equivalent is 'admin').
+// Read-only by design: live from GET /health on the vehicle-detection
+// API, since threshold changes are an ops task, not a UI control (per
+// the reference's own copy and the API's env-var-driven threshold).
+function VehicleSearchServiceCard() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['vehicle-api-health'],
+    queryFn: () => vehiclesApi.getVehicleApiHealth(),
+    retry: false,
+  })
+
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)]">
+      <div className="border-b border-[var(--border-default)] px-5 py-[18px]">
+        <div className="flex items-center gap-2.5">
+          <span className="text-base font-semibold">Vehicle search service</span>
+          <span className="rounded-[5px] bg-[var(--color-status-ai-bg)] px-[7px] py-0.5 text-[10.5px] font-semibold text-[var(--color-status-ai)]">
+            READ-ONLY
+          </span>
+        </div>
+        <p className="mt-0.5 text-[12.5px] text-[var(--text-secondary)]">
+          Live from <span className="font-mono">GET /health</span> on the vehicle-detection API.
+          Threshold changes are an ops task, not a UI control.
+        </p>
+      </div>
+      {isLoading ? (
+        <div className="p-5 text-sm text-[var(--text-secondary)]">Loading…</div>
+      ) : isError || !data ? (
+        <div className="p-5 text-sm text-[var(--text-secondary)]">
+          Couldn't reach the vehicle search service.
+        </div>
+      ) : (
+        <div className="grid items-center gap-3.5 p-5 text-[13.5px]" style={{ gridTemplateColumns: '220px 1fr' }}>
+          <p className="text-[var(--text-secondary)]">Status</p>
+          <p>
+            <span className="inline-flex items-center gap-[7px] rounded-full bg-[var(--color-status-online-bg)] px-2.5 py-[3px] text-xs font-medium text-[var(--color-status-online)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-status-online)]" />
+              {data.status}
+            </span>
+          </p>
+          <p className="text-[var(--text-secondary)]">Similarity threshold</p>
+          <p className="font-mono text-[13px]">{data.route_similarity_threshold}</p>
+          <p className="text-[var(--text-secondary)]">Embedder model</p>
+          <p className="break-all font-mono text-[12.5px]">{data.embedder_model_path}</p>
+        </div>
+      )}
     </div>
   )
 }

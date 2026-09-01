@@ -1,0 +1,24 @@
+[project]
+name = "vehicle-reid-phase0"
+version = "0.1.0"
+description = "Phase 0 proof-of-concept: pretrained vehicle re-identification baseline"
+requires-python = ">=3.12"
+dependencies = [
+    "onnxruntime>=1.18",
+    "Pillow>=10.4",
+    "numpy>=1.26",
+    "huggingface_hub>=0.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+training = [
+    "torch>=2.13",
+    "onnx>=1.22",
+    "onnxscript>=0.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

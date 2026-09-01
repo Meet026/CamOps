@@ -1,0 +1,18 @@
+models/
+data/degraded/
+reports/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Training data — large, regenerable via
+# training/prepare_veriwild_training_data.py (see training/README.md).
+# Never committed: CLIP-ReID/data/ alone is ~7.4GB, and the zip built
+# from it for Colab upload is ~7.1GB — both exceed GitHub's 100MB
+# per-file limit outright.
+training/CLIP-ReID/data/
+training/CLIP-ReID-with-data.zip
+training/CLIP-ReID/__pycache__/
+training/CLIP-ReID/**/__pycache__/

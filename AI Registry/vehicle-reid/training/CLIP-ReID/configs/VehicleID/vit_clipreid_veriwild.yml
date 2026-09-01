@@ -1,0 +1,114 @@
+# Phase 1 fine-tuning config for VeRi-Wild — see
+# ../../../../docs/superpowers/specs/2026-08-31-vehicle-reid-phase1-design.md
+#
+# Based on the real reference configs/VehicleID/vit_clipreid.yml (copied
+# verbatim, then modified only where noted below) rather than invented from
+# scratch, per the plan's explicit constraint to adapt the real repo.
+#
+# Changes from the reference config:
+#   - MODEL.SIE_CAMERA / SIE_COE enabled (were commented-out defaults in
+#     every reference vehicle config) — this is the REAL, already-
+#     implemented mechanism (see model/make_model_clipreid.py) for
+#     fighting the camera/background-context bias diagnosed in Phase 0.
+#     A custom hard-negative batch sampler was considered and deliberately
+#     DROPPED in favor of this proven, built-in mechanism once its real
+#     behavior (feeding camera ID as a learned embedding) was verified by
+#     reading the model code, not assumed from the option's name.
+#   - DATASETS.NAMES / ROOT_DIR / OUTPUT_DIR set for VeRi-Wild.
+#   - SOLVER.STAGE2.CHECKPOINT_PERIOD changed from the reference's 60
+#     (save only once, at the very end) to 10 — after losing 55/60 epochs
+#     of a real Colab run to a GPU-quota disconnect with nothing saved to
+#     resume from. Combined with train_clipreid.py's new --resume_from
+#     flag (added for the same reason — the upstream script otherwise has
+#     no resume mechanism at all), a disconnect now costs at most ~10
+#     epochs instead of the whole run.
+#   - All other values (learning rate, batch size, loss weights, epochs)
+#     are the original authors' tuned defaults, left unchanged — no
+#     hyperparameter here was guessed.
+MODEL:
+  PRETRAIN_CHOICE: 'imagenet'
+  METRIC_LOSS_TYPE: 'triplet'
+  IF_LABELSMOOTH: 'on'
+  IF_WITH_CENTER: 'no'
+  NAME: 'ViT-B-16'
+  STRIDE_SIZE: [16, 16]
+  ID_LOSS_WEIGHT : 0.25
+  TRIPLET_LOSS_WEIGHT : 1.0
+  I2T_LOSS_WEIGHT : 1.0
+  SIE_CAMERA: True
+  SIE_COE: 1.0
+
+INPUT:
+  SIZE_TRAIN: [256, 256]
+  SIZE_TEST: [256, 256]
+  PROB: 0.5 # random horizontal flip
+  RE_PROB: 0.5 # random erasing
+  PADDING: 10
+  PIXEL_MEAN: [0.5, 0.5, 0.5]
+  PIXEL_STD: [0.5, 0.5, 0.5]
+
+DATALOADER:
+  SAMPLER: 'softmax_triplet'
+  NUM_INSTANCE: 4
+  NUM_WORKERS: 8
+
+SOLVER:
+  STAGE1:
+    IMS_PER_BATCH: 256
+    OPTIMIZER_NAME: "Adam"
+    BASE_LR: 0.00035
+    WARMUP_LR_INIT: 0.00001
+    LR_MIN: 1e-6
+    WARMUP_METHOD: 'linear'
+    WEIGHT_DECAY:  1e-4
+    WEIGHT_DECAY_BIAS: 1e-4
+    MAX_EPOCHS: 60
+    CHECKPOINT_PERIOD: 60
+    LOG_PERIOD: 50
+    WARMUP_EPOCHS: 5
+    
+  STAGE2:
+    IMS_PER_BATCH: 64
+    OPTIMIZER_NAME: "Adam"
+    BASE_LR: 0.00005
+    WARMUP_METHOD: 'linear'
+    WARMUP_ITERS: 10
+    WARMUP_FACTOR: 0.1
+    WEIGHT_DECAY:  0.0001
+    WEIGHT_DECAY_BIAS: 0.0001
+    LARGE_FC_LR: False
+    MAX_EPOCHS: 60
+    CHECKPOINT_PERIOD: 10
+    LOG_PERIOD: 50
+    EVAL_PERIOD: 60
+    BIAS_LR_FACTOR: 2
+    
+    STEPS: [30, 50]
+    GAMMA: 0.1
+  
+TEST:
+  EVAL: True
+  IMS_PER_BATCH: 64
+  RE_RANKING: False
+  WEIGHT: ''
+  NECK_FEAT: 'before'
+  FEAT_NORM: 'yes'
+
+DATASETS:
+  NAMES: ('veriwild')
+  ROOT_DIR: ('./data')
+
+
+# Points at your mounted Google Drive (Colab: drive.mount('/content/drive')),
+# not Colab's own temporary disk — checkpoints must survive a session
+# disconnect to actually be resumable (see CHECKPOINT_PERIOD's comment
+# above and train_clipreid.py's --resume_from). Colab's local /content
+# disk is wiped on every disconnect, which is exactly what caused the
+# real 55/60-epoch loss this setup now protects against.
+#
+# If NOT running in Colab (e.g. running locally with a GPU), override this
+# on the command line instead:
+#   python train_clipreid.py --config_file ... OUTPUT_DIR './output/veriwild_finetune'
+OUTPUT_DIR: '/content/drive/MyDrive/veriwild_finetune_output'
+
+# CUDA_VISIBLE_DEVICES=0 python train_clipreid.py --config_file configs/VehicleID/vit_clipreid_veriwild.yml
