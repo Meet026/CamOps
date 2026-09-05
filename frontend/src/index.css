@@ -148,3 +148,21 @@ body {
 .zoom-in-95 {
   animation-name: zoom-in-95;
 }
+
+/* Live Stream pages (Sentinel.dc.html @keyframes marq / pulseDot) — the
+   indeterminate progress bar on the "Connecting to camera" state, and the
+   LIVE badge's pulsing dot once a stream is actually playing. */
+@keyframes stream-marquee {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-stream-marquee {
+  animation: stream-marquee 1.9s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+@keyframes stream-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.animate-stream-pulse {
+  animation: stream-pulse-dot 1.6s ease-in-out infinite;
+}

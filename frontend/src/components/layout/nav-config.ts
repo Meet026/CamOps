@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   Activity,
   Search,
+  Video,
 } from 'lucide-react'
 import type { AppRole } from '@/types/api'
 
@@ -42,6 +43,12 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/vehicle-search',
     icon: Search,
     roles: ['admin', 'field_officer'],
+  },
+  {
+    label: 'Live Stream',
+    path: '/live-stream',
+    icon: Video,
+    roles: ['admin', 'field_officer', 'dept_viewer'],
   },
   {
     label: 'Scoring',

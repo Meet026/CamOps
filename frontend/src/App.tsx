@@ -25,6 +25,15 @@ const VehicleSearchPage = lazy(() =>
 const VehicleSearchResultsPage = lazy(() =>
   import('@/pages/vehicle-search/VehicleSearchResultsPage').then((m) => ({ default: m.VehicleSearchResultsPage })),
 )
+const LiveStreamListPage = lazy(() =>
+  import('@/pages/stream/LiveStreamListPage').then((m) => ({ default: m.LiveStreamListPage })),
+)
+const LiveStreamViewerPage = lazy(() =>
+  import('@/pages/stream/LiveStreamViewerPage').then((m) => ({ default: m.LiveStreamViewerPage })),
+)
+const LiveStreamGridPage = lazy(() =>
+  import('@/pages/stream/LiveStreamGridPage').then((m) => ({ default: m.LiveStreamGridPage })),
+)
 const ScoringQueuePage = lazy(() => import('@/pages/scoring/ScoringQueuePage').then((m) => ({ default: m.ScoringQueuePage })))
 const HealthDashboardPage = lazy(() => import('@/pages/health/HealthDashboardPage').then((m) => ({ default: m.HealthDashboardPage })))
 const AuditLogPage = lazy(() => import('@/pages/audit-log/AuditLogPage').then((m) => ({ default: m.AuditLogPage })))
@@ -89,6 +98,30 @@ function App() {
                     }
                   />
                   <Route path="/map" element={<GisMapPage />} />
+                  <Route
+                    path="/live-stream"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin', 'field_officer', 'dept_viewer']}>
+                        <LiveStreamListPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/live-stream/grid"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin', 'field_officer', 'dept_viewer']}>
+                        <LiveStreamGridPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/live-stream/:cameraId"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin', 'field_officer', 'dept_viewer']}>
+                        <LiveStreamViewerPage />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route
                     path="/vehicle-search"
                     element={

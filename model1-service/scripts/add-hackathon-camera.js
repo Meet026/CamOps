@@ -16,6 +16,11 @@
  *        - streamPath   = the full RTSP URL (stored as-is; Model 1 never
  *                          opens this connection itself — see
  *                          HACKATHON_INGEST_SPEC.md at the repo root)
+ *        - ipAddress, rtspPort = parsed directly out of --rtsp's own host
+ *                          and port (e.g. rtsp://103.250.160.189:8554/...
+ *                          -> ip_address=103.250.160.189, rtsp_port=8554)
+ *                          rather than requiring them as separate flags —
+ *                          the URL is already the single source of truth.
  *        - cameraType   = 'ip' (has a network stream)
  *        - dataConfidence = 'self_reported' (geocoded from a name, not a
  *                            precise on-site GPS reading)
@@ -31,6 +36,11 @@
  *
  * --dept must be one of the existing department codes (HOME, RTO, FCS,
  * MUNI, HEALTH) — run with --list-depts to see them.
+ *
+ * If Nominatim has no record of the place name, either pass --lat/--lon
+ * manually, or pass --allow-unresolved to insert anyway with an obvious
+ * placeholder (0, 0) coordinate — meant to be batch-corrected later, never
+ * silently trusted as a real location.
  */
 
 require('dotenv').config();
@@ -101,7 +111,22 @@ async function main() {
     process.exit(1);
   }
 
+  // Parse host/port straight out of the given RTSP URL (e.g.
+  // rtsp://103.250.160.189:8554/stream/cam07) rather than requiring them
+  // as separate flags — the URL is already the single source of truth
+  // for this, and re-typing the same host/port per camera invites typos.
+  let ipAddress = null;
+  let rtspPort = null;
+  try {
+    const parsed = new URL(rtsp);
+    ipAddress = parsed.hostname || null;
+    rtspPort = parsed.port ? parseInt(parsed.port, 10) : null;
+  } catch {
+    console.warn(`Warning: could not parse host/port out of "${rtsp}" — ip_address/rtsp_port left null.`);
+  }
+
   let geo;
+  let dataConfidence = 'self_reported';
   if (args.lat && args.lon) {
     // Manual override — used when Nominatim has no record of the landmark
     // (common for informal local bridge/junction names in India).
@@ -109,8 +134,25 @@ async function main() {
     console.log(`Using manually supplied coordinates: (${geo.lat}, ${geo.lon})`);
   } else {
     console.log(`Geocoding "${place}" via Nominatim...`);
-    geo = await geocode(place);
-    console.log(`  -> resolved to (${geo.lat}, ${geo.lon}) — "${geo.displayName}"`);
+    try {
+      geo = await geocode(place);
+      console.log(`  -> resolved to (${geo.lat}, ${geo.lon}) — "${geo.displayName}"`);
+    } catch (err) {
+      if (args['allow-unresolved']) {
+        // Explicit opt-in only: insert the camera anyway with an obviously
+        // fake placeholder coordinate (0,0 — off the coast of Africa, not
+        // a real location anyone could mistake for Gujarat), flagged via
+        // dataConfidence so it's easy to find and fix later. Never the
+        // default — a bad guess in a police GIS tool is worse than a
+        // clear failure demanding a real value.
+        console.warn(`  -> Nominatim failed: ${err.message}`);
+        console.warn('  -> --allow-unresolved set: inserting with placeholder (0, 0) coordinates — FIX THESE LATER.');
+        geo = { lat: 0, lon: 0, displayName: '(placeholder — unresolved)' };
+        dataConfidence = 'self_reported';
+      } else {
+        throw err;
+      }
+    }
   }
 
   // locationGeo is PostGIS GEOGRAPHY(POINT, 4326) — must go through
@@ -118,7 +160,7 @@ async function main() {
   const [camera] = await prisma.$queryRaw`
     INSERT INTO camera (
       department_id, name, location_geo, address_text,
-      camera_type, stream_path, data_confidence
+      camera_type, stream_path, ip_address, rtsp_port, data_confidence
     )
     VALUES (
       ${department.departmentId}::uuid,
@@ -127,14 +169,18 @@ async function main() {
       ${place},
       'ip',
       ${rtsp},
-      'self_reported'
+      ${ipAddress}::inet,
+      ${rtspPort},
+      ${dataConfidence}
     )
     ON CONFLICT (department_id, name) DO UPDATE SET
       location_geo = EXCLUDED.location_geo,
       address_text = EXCLUDED.address_text,
       stream_path = EXCLUDED.stream_path,
+      ip_address = EXCLUDED.ip_address,
+      rtsp_port = EXCLUDED.rtsp_port,
       updated_at = now()
-    RETURNING camera_id, name, address_text, stream_path;
+    RETURNING camera_id, name, address_text, stream_path, ip_address, rtsp_port;
   `;
 
   console.log('Inserted/updated camera:');

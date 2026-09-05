@@ -9,6 +9,7 @@ import { useCheckNow, useHealthCurrent, useHealthHistory } from '@/hooks/useHeal
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { LocationPickerMap } from '@/components/shared/LocationPickerMap'
 import { useDepartments } from '@/hooks/useDepartments'
 import type { CameraRecord, HealthHistoryEntry } from '@/types/api'
@@ -49,7 +50,7 @@ export function CameraDetailPage() {
   usePageTitle(cameraQuery.data ? cameraQuery.data.name : 'Camera')
 
   if (cameraQuery.isLoading) {
-    return <div className="p-6 text-sm text-[var(--text-secondary)]">Loading…</div>
+    return <CameraDetailSkeleton />
   }
 
   if (cameraQuery.isError || !cameraQuery.data) {
@@ -147,16 +148,16 @@ export function CameraDetailPage() {
           </div>
 
           {(canEdit || canDeactivate) && (
-            <div className="flex flex-col gap-1 rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-2.5">
+            <div className="flex flex-col gap-2 rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-2.5">
               {canEdit && (
                 <button
                   onClick={() => navigate(`/cameras/${camera.cameraId}/edit`)}
-                  className="rounded-lg bg-[var(--color-brand)] px-3 py-2.5 text-center text-[13px] font-semibold text-white transition-[filter] duration-150 hover:brightness-110">
+                  className="h-9 rounded-[var(--radius-sm)] bg-[var(--color-brand)] px-4 text-center text-sm font-medium text-white transition-colors duration-150 hover:brightness-110">
                   Edit camera
                 </button>
               )}
               {canDeactivate && camera.isActive && (
-                <Button variant="destructive" size="sm" onClick={() => setConfirmDeactivate(true)} className="w-full">
+                <Button variant="destructive" size="md" onClick={() => setConfirmDeactivate(true)} className="w-full">
                   Deactivate
                 </Button>
               )}
@@ -176,6 +177,70 @@ export function CameraDetailPage() {
         onCancel={() => setConfirmDeactivate(false)}
         isConfirming={deactivateMutation.isPending}
       />
+    </div>
+  )
+}
+
+// Shimmer, not a spinner or plain "Loading…" text — mirrors this app's own
+// established loading pattern (Model 1 PRD: "skeleton tiles, matching the
+// exact shape of the real content — prevents layout shift and feels
+// faster than a centered spinner"), and matches the actual page's shape
+// (two-column layout, tabs, photo + pills, the 12-cell fact grid, the
+// three sidebar cards) so nothing jumps once real data arrives.
+function CameraDetailSkeleton() {
+  return (
+    <div className="p-6">
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1fr_320px]">
+        <div className="overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)]">
+          <div className="flex gap-2 border-b border-[var(--border-default)] px-2.5 py-1.5">
+            <Skeleton className="h-7 w-20" />
+            <Skeleton className="h-7 w-16" />
+            <Skeleton className="h-7 w-20" />
+          </div>
+          <div className="p-5">
+            <div className="mb-6 flex gap-5">
+              <Skeleton className="h-[132px] w-[200px] shrink-0" />
+              <div className="flex-1 space-y-3">
+                <div className="flex gap-2.5">
+                  <Skeleton className="h-7 w-40 rounded-full" />
+                  <Skeleton className="h-7 w-28 rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-3/4" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--border-default)] sm:grid-cols-3">
+              {Array.from({ length: 12 }).map((_, i) => (
+                <div key={i} className="space-y-1.5 bg-[var(--bg-surface)] px-4 py-3.5">
+                  <Skeleton surface="raised" className="h-2.5 w-16" />
+                  <Skeleton surface="raised" className="h-4 w-24" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <aside className="flex flex-col gap-3">
+          <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4">
+            <Skeleton className="mb-3 h-2.5 w-20" />
+            <div className="flex flex-wrap gap-2">
+              <Skeleton className="h-6 w-16 rounded-full" />
+              <Skeleton className="h-6 w-24 rounded-full" />
+              <Skeleton className="h-6 w-32 rounded-full" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-2.5">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+          <div className="rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4">
+            <Skeleton className="mb-3 h-2.5 w-24" />
+            <div className="space-y-3">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   )
 }
@@ -203,6 +268,11 @@ function OverviewTab({
   score: { label: string; fg: string; bg: string; dashed?: boolean }
   onEdit: () => void
 }) {
+  const ipAndPort =
+    camera.ipAddress && camera.rtspPort != null
+      ? `${camera.ipAddress}:${camera.rtspPort}`
+      : camera.ipAddress || '—'
+
   const facts = [
     { k: 'Camera id', v: camera.cameraId.slice(0, 13), mono: true },
     { k: 'Department', v: department || '—' },
@@ -211,8 +281,15 @@ function OverviewTab({
     { k: 'Model', v: camera.model || '—', mono: true },
     { k: 'Installed', v: camera.installedAt ? format(new Date(camera.installedAt), 'PP') : '—' },
     { k: 'Coordinates', v: `${camera.latitude}, ${camera.longitude}`, mono: true },
+    { k: 'Address', v: camera.addressText || '—' },
+    { k: 'IP : Port', v: ipAndPort, mono: true },
     { k: 'Created', v: format(new Date(camera.createdAt), 'yyyy-MM-dd HH:mm'), mono: true },
     { k: 'Updated', v: format(new Date(camera.updatedAt), 'yyyy-MM-dd HH:mm'), mono: true },
+    // Placed last so it lands as the 12th fact — exactly filling out the
+    // 4th row of 3 (3+3+3+3=12) instead of leaving a dangling empty
+    // cell, which is what the previous "Created / Updated / (empty)"
+    // last row did.
+    { k: 'Stream path', v: camera.streamPath || '—', mono: true },
   ]
 
   return (
@@ -260,13 +337,32 @@ function OverviewTab({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--border-default)] sm:grid-cols-3">
-        {facts.map((f) => (
-          <div key={f.k} className="bg-[var(--bg-surface)] px-4 py-3.5">
-            <p className="mb-1 text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{f.k}</p>
-            <p className={f.mono ? 'font-mono text-[13.5px]' : 'text-[13.5px]'}>{f.v}</p>
-          </div>
-        ))}
+      <div className="overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)]">
+        {/* Each cell owns its own right/bottom border, instead of the grid
+            container's background showing through gaps — a container
+            background only fills real cells, so any incomplete last row
+            left a dark "phantom" block over the missing cells. Per-cell
+            borders never have that problem. The fact list is kept at a
+            multiple of 3 (Stream path is last, filling the 12th slot)
+            so every row is always full — no empty trailing cell at all. */}
+        <div className="grid grid-cols-1 sm:grid-cols-3">
+          {facts.map((f, i, arr) => {
+            const isLastInRow = i % 3 === 2
+            const isInLastRow = i >= arr.length - 3
+            const borderClasses = [
+              !isLastInRow && 'sm:border-r',
+              !isInLastRow && 'border-b',
+            ]
+              .filter(Boolean)
+              .join(' ')
+            return (
+              <div key={f.k} className={`border-[var(--border-default)] px-4 py-3.5 ${borderClasses}`}>
+                <p className="mb-1 text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{f.k}</p>
+                <p className={f.mono ? 'break-all font-mono text-[13.5px]' : 'text-[13.5px]'}>{f.v}</p>
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

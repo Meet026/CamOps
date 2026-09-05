@@ -38,6 +38,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/DropdownMenu";
 
+// First 8 chars + last 4 chars, with the full name always available via
+// the title attribute on hover — used for the Camera column specifically,
+// since real camera names here can run long (e.g. "Khaparia Gram
+// Panchayat Taluka Gandevi District Navsari") and were pushing every
+// other column out of alignment.
+function truncateMiddle(value: string, head = 8, tail = 4): string {
+  if (value.length <= head + tail + 1) return value;
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+}
+
+// One shared column template for both the header row and every data row —
+// previously these were two separately-typed strings that could drift out
+// of sync; sharing one constant makes that impossible, and fixes the
+// uneven column spacing.
+const CAMERA_ROW_GRID =
+  "minmax(160px,1.3fr) minmax(120px,1fr) 70px minmax(160px,1.4fr) 120px minmax(120px,1fr) 100px 40px";
+
 const SCORE_CHIPS: { value: IntegrationScore; label: string; dot: string }[] = [
   { value: "easy", label: "Easy", dot: "var(--color-status-online)" },
   { value: "medium", label: "Medium", dot: "var(--color-status-unknown)" },
@@ -330,15 +347,14 @@ export function CameraListPage() {
           {/* Desktop grid */}
           <div className="hidden overflow-x-auto md:block">
             <div
-              className="grid min-w-[1080px] gap-3 border-b border-[var(--border-default)] px-4 py-[9px] text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]"
+              className="grid min-w-[1080px] gap-4 border-b border-[var(--border-default)] px-4 py-[9px] text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]"
               style={{
-                gridTemplateColumns:
-                  "minmax(200px,1.9fr) minmax(120px,1.1fr) 70px 130px 120px minmax(120px,1.1fr) 100px 40px",
+                gridTemplateColumns: CAMERA_ROW_GRID,
               }}>
               <div>Camera</div>
               <div>Department</div>
               <div>Type</div>
-              <div>Integration</div>
+              <div>Stream path</div>
               <div>Status</div>
               <div>Brand / model</div>
               <div>Updated</div>
@@ -349,12 +365,11 @@ export function CameraListPage() {
                 key={camera.cameraId}
                 onClick={() => navigate(`/cameras/${camera.cameraId}`)}
                 className={cn(
-                  "group grid min-w-[1080px] cursor-pointer items-center gap-3 border-b border-[var(--border-default)] px-4 transition-colors duration-150 last:border-0 hover:bg-[var(--bg-surface-raised)]",
+                  "group grid min-w-[1080px] cursor-pointer items-center gap-4 border-b border-[var(--border-default)] px-4 transition-colors duration-150 last:border-0 hover:bg-[var(--bg-surface-raised)]",
                   density === "comfortable" ? "py-[13px]" : "py-[7px]",
                 )}
                 style={{
-                  gridTemplateColumns:
-                    "minmax(200px,1.9fr) minmax(120px,1.1fr) 70px 130px 120px minmax(120px,1.1fr) 100px 40px",
+                  gridTemplateColumns: CAMERA_ROW_GRID,
                 }}>
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span
@@ -369,8 +384,10 @@ export function CameraListPage() {
                     }}
                   />
                   <div className="min-w-0">
-                    <p className="truncate text-[13.5px] font-medium">
-                      {camera.name}
+                    <p
+                      className="truncate text-[13.5px] font-medium"
+                      title={camera.name}>
+                      {truncateMiddle(camera.name)}
                     </p>
                     <p className="truncate font-mono text-[11.5px] text-[var(--text-secondary)]">
                       {camera.cameraId.slice(0, 8)}
@@ -378,15 +395,21 @@ export function CameraListPage() {
                   </div>
                 </div>
                 <div className="min-w-0">
-                  <span className="truncate rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 text-xs text-[var(--text-secondary)]">
+                  <span
+                    className="inline-block truncate rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 text-xs text-[var(--text-secondary)]"
+                    title={departmentName(camera.departmentId)}>
                     {departmentName(camera.departmentId)}
                   </span>
                 </div>
                 <div className="font-mono text-[12.5px] uppercase text-[var(--text-secondary)]">
                   {camera.cameraType}
                 </div>
-                <div>
-                  <IntegrationScorePill score={camera.integrationScore} />
+                <div className="min-w-0">
+                  <span
+                    className="inline-block max-w-full truncate rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]"
+                    title={camera.streamPath ?? undefined}>
+                    {camera.streamPath ?? "—"}
+                  </span>
                 </div>
                 <div>
                   <CurrentStatusPill status={camera.currentStatus} />
