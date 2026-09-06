@@ -35,7 +35,16 @@ export function VehicleSearchPage() {
     setStep('searching')
     try {
       const result: VehicleRouteResponse = await searchMutation.mutateAsync(photoToSend)
-      navigate('/vehicle-search/results', { state: { result, photoPreviewUrl: previewUrl } })
+      // searchedAt stamps when this response was actually produced. The
+      // results page renders purely from router state and never
+      // re-fetches, so reloading or revisiting that URL replays an old
+      // response indefinitely — which genuinely caused a stale route to
+      // be reported as a live bug after the backend had already been
+      // fixed. The results page uses this to say how old the result is
+      // instead of presenting stale data as current.
+      navigate('/vehicle-search/results', {
+        state: { result, photoPreviewUrl: previewUrl, searchedAt: Date.now() },
+      })
     } catch {
       setStep('crop')
     }

@@ -433,3 +433,91 @@ asked "why," rather than accepting the first answer. That pattern — verify
 before trusting, and say so plainly when something turns out wrong — is
 the actual methodology this whole effort has followed, more than any
 single technical choice documented above.
+
+---
+
+## Part 8 — Live Route Matching: Measured Failure and the Fixes (2026-09-05)
+
+Once `vehicle-ingest` began writing real sightings from live cameras, the
+route feature could be judged on real data for the first time. It failed,
+and the failure was measured rather than estimated.
+
+### 8.1 What was actually wrong
+
+**Physically impossible routes.** `find_route()` ranked candidates purely
+by embedding similarity, with no awareness of geography or time. Measured
+on real consecutive stops it returned, implied travel speeds reached
+**~1,496,278 km/h**. One reported route claimed ~1,000 km in under two
+hours (≈536 km/h).
+
+**Mass false matching.** A single query returned **88 "same vehicle"
+matches out of 242 car sightings stored at one camera** — 36% of every car
+matching every other car. A traffic camera does not see the same car 88
+times in three hours.
+
+**Cross-class matches.** Cars matched motorcycles and trucks.
+
+### 8.2 Threshold, measured on 150 real stored embeddings (11,175 pairs)
+
+Counting only pairs of *different* vehicle classes that still cleared the
+bar — an unambiguous error, so a floor on the true error rate:
+
+| threshold | cross-class false matches |
+|---|---|
+| 0.80 | 51 (1.6%) |
+| 0.85 | 9 (0.3%) |
+| 0.90 | 3 (0.1%) |
+| 0.95 | 2 (0.1%) |
+
+Same-class p95 similarity is only **0.823**, so pushing past 0.90 discards
+many true matches for almost no further gain. **0.90 was chosen**, not
+0.80 and not 0.95.
+
+### 8.3 Base vs fine-tuned model, scored on identical real crops
+
+Six real camera crops, 15 pairs, both models on the same inputs:
+
+| | true match (same parked car, 2 frames) | worst false match | margin |
+|---|---|---|---|
+| fine-tuned | 0.9289 | 0.7093 | **0.22** |
+| base HF | 0.9623 | 0.8068 (motorcycle vs car) | **0.16** |
+
+Base mean similarity 0.737 vs fine-tuned 0.576 — the base model scores
+everything higher, including wrong pairs. **The base model is the less
+discriminating of the two**, and at a 0.80 cutoff it would call a
+motorcycle and a car the same vehicle. It is in use at the project
+owner's explicit request; the 0.90 threshold is what makes that safe.
+
+### 8.4 The embedding-space trap
+
+The **same image** embedded by the base and fine-tuned models has a cosine
+similarity of only **0.4974** to itself. The two spaces are not
+comparable. Because `vehicle-ingest` writes embeddings and
+`vehicle-detection` reads them, a model mismatch between those services
+would raise no error — every query would score ~0.5 against everything and
+the feature would silently return nothing forever. Both services now
+declare the model path with a comment stating they must be changed
+together. Switching models requires discarding or re-embedding stored
+rows; the 398 fine-tuned rows were deleted when the base model was
+adopted.
+
+### 8.5 Fixes applied
+
+- `filter_plausible_route()` in `sighting_store.py` — drops any stop
+  requiring more than 150 km/h from the last *kept* stop (greedy, so a
+  rejected stop never becomes the baseline). Same-camera stops are always
+  plausible regardless of time gap.
+- Same-class SQL guard in `find_route()` — a car is only compared against
+  stored cars. Filtered in SQL so `LIMIT` is spent on real candidates.
+- Threshold raised 0.80 → 0.90.
+- Whole-image fallback in `/vehicles/route` when the detector finds zero
+  vehicles in an already-cropped query photo, reported honestly via
+  `used_whole_image_fallback` with `detection_confidence: null`.
+
+### 8.6 What is still NOT fixed
+
+None of the above makes the model able to tell two similar vehicles apart.
+The filters remove impossible and provably-wrong matches; they cannot
+turn a weak embedding into a reliable identification. **Route results
+remain "possible matches, not confirmed identifications"** — the UI says
+so, and that wording is accurate, not a disclaimer of convenience.

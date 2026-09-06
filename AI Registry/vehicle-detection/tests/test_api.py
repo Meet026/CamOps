@@ -20,6 +20,14 @@ TEST_DATABASE_URL = os.environ.get("VEHICLE_DETECTION_TEST_DATABASE_URL")
 TEST_PHOTO = os.path.join(
     os.path.dirname(__file__), "..", "data", "test_images_coco128", "000000000064.jpg"
 )
+# A real, already-tightly-cropped single-vehicle image (a motorcycle,
+# ~92x73px) pulled from a real live camera this session — confirmed to
+# make VehicleDetector.detect() return ZERO detections (the crop strips
+# away the scene context YOLO relies on). This is the exact real-world
+# case the whole-image-embedding fallback in api.py exists to fix.
+ZERO_DETECTION_PHOTO = os.path.join(
+    os.path.dirname(__file__), "..", "data", "test_images_coco128", "real_zero_detection_crop.jpg"
+)
 
 
 @pytest.mark.skipif(
@@ -149,3 +157,57 @@ def test_vehicles_route_applies_configurable_threshold_via_env(monkeypatch):
     # default rather than this test's override leaking forward.
     monkeypatch.delenv("ROUTE_SIMILARITY_THRESHOLD", raising=False)
     importlib.reload(api_module)
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database + real model test, opt-in only",
+)
+def test_vehicles_route_falls_back_to_whole_image_on_zero_detections(monkeypatch):
+    """
+    The real bug this fixes: uploading an already-cropped vehicle photo
+    (not a full scene) used to return `{"detections": []}` — "no vehicle
+    detected" — even though the photo genuinely contains one vehicle,
+    because YOLO relies on scene context a tight crop strips away.
+    ZERO_DETECTION_PHOTO is confirmed (see its own comment above) to
+    produce exactly zero real YOLO detections. This proves the API no
+    longer gives up at that point: it must fall back to embedding the
+    whole image directly and still return a real, usable result.
+    """
+    monkeypatch.setenv("VEHICLE_DETECTION_TEST_DATABASE_URL", TEST_DATABASE_URL)
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    from sighting_store import SightingStore as RealSightingStore
+
+    original_init = RealSightingStore.__init__
+
+    def _init_with_test_url(self, database_url=None):
+        original_init(self, database_url=database_url or TEST_DATABASE_URL)
+
+    monkeypatch.setattr(RealSightingStore, "__init__", _init_with_test_url)
+
+    with TestClient(api_module.app) as client:
+        with open(ZERO_DETECTION_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("real_zero_detection_crop.jpg", f, "image/jpeg")},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    # The real bug: this used to be an empty list. Now it must contain
+    # exactly one result — the whole-image fallback path, not a real
+    # per-vehicle detection (there were none).
+    assert len(body["detections"]) == 1
+
+    result = body["detections"][0]
+    assert result["used_whole_image_fallback"] is True
+    # A real YOLO score would be a float; this path never ran YOLO on the
+    # final embedded image, so confidence must be honestly absent (None),
+    # not a fabricated number pretending to be a real detection score.
+    assert result["detection_confidence"] is None
+    # A route key (even an empty list) must be present — proves
+    # find_route() genuinely ran against the embedding, rather than the
+    # request short-circuiting before ever reaching the database.
+    assert "route" in result or "error" in result

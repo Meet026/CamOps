@@ -31,32 +31,66 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from PIL import Image, UnidentifiedImageError
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "vehicle-reid", "src"))
 
-from detector import VehicleDetector, DetectorError  # noqa: E402
+from detector import VehicleDetector, VehicleDetection, DetectorError  # noqa: E402
 from sighting_store import SightingStore, SightingStoreError  # noqa: E402
 from embedder import VehicleEmbedder, EmbedderError  # noqa: E402
 from preprocessing import to_model_input  # noqa: E402
 
 
-# The fine-tuned (Phase 1, 500-vehicle) model is the real default — not
-# the untrained base model. This was a real bug: DEFAULT_EMBEDDER_MODEL
-# previously pointed at the base model, and VEHICLE_REID_MODEL_PATH was
-# never actually set anywhere, so every deployment silently ran the
-# weaker, non-fine-tuned model despite docs claiming the fine-tuned one
-# was deployed. Fetch both via vehicle-reid/scripts/fetch_model.py.
+# Set back to the base HuggingFace model (occurra/vehicle_vit_clip_reid)
+# at the project owner's explicit request, reverting the Phase 1
+# fine-tuned default.
+#
+# Measured trade-off on this project's own real camera crops (6 crops,
+# 15 pairs, both models scored on identical inputs) — recorded here so
+# this choice isn't re-litigated from memory:
+#   - Both models rank the SAME true pair (one parked car seen in two
+#     frames ~60s apart) as their top match: base 0.9623, fine-tuned
+#     0.9289. Both get the easy case right.
+#   - Base scores everything higher (mean 0.737 vs 0.576). Its highest
+#     FALSE pair — a motorcycle vs a car — is 0.8068; the fine-tuned
+#     model rates that same pair 0.4863.
+#   - Margin between the true match and the worst false match:
+#     fine-tuned 0.22, base 0.16.
+# So the base model is the LESS discriminating of the two, and at a
+# 0.80 cutoff it would call a motorcycle and a car the same vehicle.
+# That is precisely why ROUTE_SIMILARITY_THRESHOLD below is no longer
+# 0.80 — using this model at that cutoff is not safe.
 DEFAULT_EMBEDDER_MODEL = os.path.join(
     os.path.dirname(__file__), "..", "..", "vehicle-reid", "models",
-    "vehicle_vit_clip_reid_finetuned.onnx",
+    "vehicle_vit_clip_reid.onnx",
 )
 EMBEDDER_MODEL_PATH = os.environ.get("VEHICLE_REID_MODEL_PATH", DEFAULT_EMBEDDER_MODEL)
 
-# Provisional, explicitly not-yet-validated cutoff for "is this the same
-# vehicle" — configurable so it can be retuned without a code change once
-# a better Re-ID model exists. Set by the project owner at 80% (0.80).
-ROUTE_SIMILARITY_THRESHOLD = float(os.environ.get("ROUTE_SIMILARITY_THRESHOLD", "0.80"))
+# Raised from 0.80 to 0.90, measured — not guessed.
+#
+# The real failure this fixes: at 0.80, a single query returned 88 "same
+# vehicle" matches out of 242 car sightings stored at ONE camera (36% of
+# every car matching every other). A traffic camera does not see the
+# same car 88 times in three hours; that route was mostly false matches.
+#
+# Measured on 150 real stored embeddings from that camera (11,175 pairs),
+# counting pairs of DIFFERENT vehicle classes that still cleared the bar
+# (a car matching a truck is unambiguously wrong, so this is a floor on
+# the true error rate, not the whole of it):
+#     0.80 -> 51 cross-class false matches (1.6%)
+#     0.85 ->  9 (0.3%)
+#     0.90 ->  3 (0.1%)
+#     0.95 ->  2 (0.1%)
+# 0.90 removes ~94% of the measurable false matches; going to 0.95 buys
+# almost nothing further while discarding many true matches, since the
+# same-class p95 similarity is only 0.823. The base model's higher
+# score inflation (see above) is a second, independent reason 0.80 is
+# too low for it specifically.
+#
+# Still configurable via env, and still NOT a validated forensic cutoff —
+# it is a defensible operating point, not proof two vehicles are the same.
+ROUTE_SIMILARITY_THRESHOLD = float(os.environ.get("ROUTE_SIMILARITY_THRESHOLD", "0.90"))
 
 YOLO_MODEL_NAME = os.environ.get("VEHICLE_DETECTION_YOLO_MODEL", "yolo11n.pt")
 DETECTION_CONFIDENCE_THRESHOLD = float(os.environ.get("VEHICLE_DETECTION_CONFIDENCE", "0.4"))
@@ -124,12 +158,28 @@ def health():
 @app.post("/vehicles/route")
 async def vehicles_route(photo: UploadFile = File(...)):
     """
-    Accepts one photo (raw frame or pre-cropped, either works — mirrors
-    scripts/query_similar.py's behavior since it reuses the same
-    detect -> embed -> search building blocks). Detects every vehicle in
-    it, and for each one, queries for past sightings of the same vehicle
-    (similarity >= ROUTE_SIMILARITY_THRESHOLD), sorted chronologically so
-    the result can be drawn as a route on a map.
+    Accepts one photo. If it's a normal scene, YOLO detects every vehicle
+    in it and each one is treated separately, as before. If YOLO finds
+    ZERO vehicles, this now falls back to treating the WHOLE uploaded
+    image as one already-cropped vehicle and embeds it directly, instead
+    of immediately reporting "no vehicle detected."
+
+    Real bug this fixes: the previous docstring here claimed "raw frame
+    or pre-cropped, either works" — that was false, confirmed directly
+    by testing real, already-cropped vehicle images (down to ~80x52px)
+    through this exact code path: YOLO frequently finds 0 detections on
+    a tight crop (it relies on scene context — road, surrounding
+    vehicles for scale — that a crop strips away), or misclassifies what
+    little it can see. This is also the documented, standard shape for
+    vehicle Re-ID: a pre-cropped patch is the model's *expected* query
+    input, not an edge case — detection is a separate, optional upstream
+    step, not something the Re-ID query path should force on every
+    input. The fallback only triggers on a genuine 0-detection result —
+    a photo with a real vehicle that YOLO DID detect (even weakly) still
+    goes through the normal per-detection path unchanged, and a photo
+    with truly no vehicle in it still correctly returns no results (the
+    embedding + similarity search naturally won't find real matches for
+    an embedding of, say, an empty street or a person).
     """
     if _detector is None or _embedder is None:
         raise HTTPException(status_code=503, detail="Models not yet loaded")
@@ -151,8 +201,29 @@ async def vehicles_route(photo: UploadFile = File(...)):
                 status_code=422, detail=f"Detection failed: {e.reason} - {e}"
             )
 
+        used_whole_image_fallback = False
         if not detections:
-            return JSONResponse({"detections": []})
+            try:
+                whole_image = Image.open(tmp.name).convert("RGB")
+            except (UnidentifiedImageError, OSError) as e:
+                raise HTTPException(
+                    status_code=400, detail=f"Could not read uploaded file as an image: {e}"
+                )
+            # A real VehicleDetection standing in for the whole image, not
+            # an ad-hoc object — box_xyxy is the image's own real full
+            # bounds (a genuine, meaningful value, not a placeholder).
+            # confidence is deliberately None (not a real YOLO score) so
+            # the frontend can tell this path apart from a real detection
+            # rather than showing a fabricated number as if it were one.
+            detections = [
+                VehicleDetection(
+                    crop=whole_image,
+                    class_name="unknown",
+                    confidence=None,
+                    box_xyxy=(0, 0, whole_image.width, whole_image.height),
+                )
+            ]
+            used_whole_image_fallback = True
 
         store = SightingStore()
         try:
@@ -168,20 +239,35 @@ async def vehicles_route(photo: UploadFile = File(...)):
                         {
                             "vehicle_class": detection.class_name,
                             "detection_confidence": detection.confidence,
+                            "used_whole_image_fallback": used_whole_image_fallback,
                             "error": f"EMBEDDING_FAILED:{e.reason}",
                         }
                     )
                     continue
 
                 try:
+                    # Only compare against sightings of the SAME vehicle
+                    # class — a car match against a stored truck is a
+                    # guaranteed false positive (51 such cross-class
+                    # matches were measured clearing the old threshold).
+                    # The whole-image fallback path has class "unknown",
+                    # which matches nothing stored, so it passes None and
+                    # keeps its previous unrestricted behaviour.
                     route = store.find_route(
-                        embedding, similarity_threshold=ROUTE_SIMILARITY_THRESHOLD
+                        embedding,
+                        similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
+                        vehicle_class=(
+                            detection.class_name
+                            if detection.class_name != "unknown"
+                            else None
+                        ),
                     )
                 except SightingStoreError as e:
                     results.append(
                         {
                             "vehicle_class": detection.class_name,
                             "detection_confidence": detection.confidence,
+                            "used_whole_image_fallback": used_whole_image_fallback,
                             "error": f"ROUTE_QUERY_FAILED:{e.reason}",
                         }
                     )
@@ -196,6 +282,7 @@ async def vehicles_route(photo: UploadFile = File(...)):
                     {
                         "vehicle_class": detection.class_name,
                         "detection_confidence": detection.confidence,
+                        "used_whole_image_fallback": used_whole_image_fallback,
                         "route": route,
                         "route_threshold_used": ROUTE_SIMILARITY_THRESHOLD,
                     }

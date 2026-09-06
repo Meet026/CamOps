@@ -13,6 +13,62 @@ const GUJARAT_CENTER: [number, number] = [22.5, 71.5]
 interface LocationState {
   result: VehicleRouteResponse
   photoPreviewUrl: string | null
+  /** Epoch ms when this response was actually produced — see StaleResultNotice. */
+  searchedAt?: number
+}
+
+// How old a result can be before we say so. This page renders entirely
+// from router state and never re-fetches, so a reload or a revisit
+// replays the same response forever. That is not hypothetical: a route
+// from before a backend fix was reported as still-broken because the
+// screen never changed. Surfacing the age makes that impossible to
+// mistake for live data.
+const STALE_RESULT_AFTER_MS = 2 * 60 * 1000
+
+function StaleResultNotice({ searchedAt, onNewSearch }: { searchedAt?: number; onNewSearch: () => void }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000)
+    return () => clearInterval(id)
+  }, [])
+
+  if (searchedAt === undefined) {
+    // Pre-dates the searchedAt field (e.g. a tab left open across the
+    // deploy that added it) — age is genuinely unknown, so say that
+    // rather than guess.
+    return (
+      <StaleBanner onNewSearch={onNewSearch}>
+        These results were loaded earlier in this session and are not being refreshed.
+      </StaleBanner>
+    )
+  }
+
+  const ageMs = now - searchedAt
+  if (ageMs < STALE_RESULT_AFTER_MS) return null
+
+  const minutes = Math.floor(ageMs / 60_000)
+  return (
+    <StaleBanner onNewSearch={onNewSearch}>
+      These results are {minutes} minute{minutes === 1 ? '' : 's'} old and are not refreshed
+      automatically.
+    </StaleBanner>
+  )
+}
+
+function StaleBanner({ children, onNewSearch }: { children: React.ReactNode; onNewSearch: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-default)] bg-[var(--color-status-unknown-bg)] px-6 py-2.5 text-[12.5px] text-[var(--text-primary)]">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-status-unknown)]" />
+      <span>{children}</span>
+      <button
+        onClick={onNewSearch}
+        className="font-semibold text-[var(--color-brand)] underline-offset-2 hover:underline"
+      >
+        Run a new search
+      </button>
+    </div>
+  )
 }
 
 interface Band {
@@ -100,6 +156,11 @@ export function VehicleSearchResultsPage() {
         onNewSearch={() => navigate('/vehicle-search')}
       />
 
+      <StaleResultNotice
+        searchedAt={state.searchedAt}
+        onNewSearch={() => navigate('/vehicle-search')}
+      />
+
       {detections.length > 1 && (
         <div className="flex items-start gap-[11px] border-b border-[var(--border-default)] bg-[var(--color-status-unknown-bg)] px-6 py-3">
           <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[var(--color-status-unknown)]" />
@@ -174,7 +235,9 @@ function ResultsHeader({
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="text-[15px] font-semibold capitalize">{detection.vehicle_class}</span>
           <span className="rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
-            detection {detection.detection_confidence.toFixed(2)}
+            {detection.used_whole_image_fallback
+              ? 'used whole photo (no vehicle boundary found)'
+              : `detection ${detection.detection_confidence?.toFixed(2)}`}
           </span>
         </div>
         <p className="mt-px text-[12.5px] text-[var(--text-secondary)]">
@@ -197,7 +260,9 @@ function DetectionGroup({ detection, showHeader }: { detection: VehicleDetection
             {detection.vehicle_class}
           </span>
           <span className="font-mono text-[11.5px] text-[var(--text-secondary)]">
-            detection {detection.detection_confidence.toFixed(2)}
+            {detection.used_whole_image_fallback
+              ? 'used whole photo (no vehicle boundary found)'
+              : `detection ${detection.detection_confidence?.toFixed(2)}`}
           </span>
         </div>
       )}
@@ -338,6 +403,32 @@ function LegendRow({ color, label }: { color: string; label: string }) {
   )
 }
 
+// Real bug this fixes: a vehicle revisiting the same camera repeatedly
+// (confirmed directly against live data — one camera showed up to 279
+// sightings) means many stops share the EXACT same lat/lng. Leaflet
+// draws later markers directly on top of earlier ones at an identical
+// pixel position, so only the last-drawn stop was ever visible — the
+// route's own polyline and left-hand timeline both correctly showed
+// every stop, only the map silently hid all but one marker per location.
+// Fix: group stops by real coordinate, and nudge every repeat visit to
+// that same coordinate outward in a small spiral (in fixed SCREEN
+// pixels, not lat/lng degrees, via the map's own pixel<->latlng
+// conversion — so the offset looks the same size at any zoom level
+// instead of vanishing when zoomed in or exploding when zoomed out).
+// The single-visit case (the overwhelming majority of real cameras) is
+// completely unaffected — zero offset, exactly the original position.
+const SPIRAL_OFFSET_PX = 14 // px between each stacked marker's ring
+
+function offsetLatLngForIndex(map: L.Map, lat: number, lng: number, indexAtThisPoint: number): [number, number] {
+  if (indexAtThisPoint === 0) return [lat, lng]
+  const angle = indexAtThisPoint * 2.4 // radians; irrational-ish step spreads points around the circle instead of overlapping on a diameter
+  const radius = SPIRAL_OFFSET_PX * Math.sqrt(indexAtThisPoint) // sqrt spacing keeps rings evenly dense as the count grows
+  const center = map.latLngToLayerPoint([lat, lng])
+  const offsetPoint = L.point(center.x + radius * Math.cos(angle), center.y + radius * Math.sin(angle))
+  const offsetLatLng = map.layerPointToLatLng(offsetPoint)
+  return [offsetLatLng.lat, offsetLatLng.lng]
+}
+
 // Draws the dashed route polyline + numbered circular markers to match the
 // design's drawRoute() exactly (dash pattern, marker sizing, fitBounds
 // with 0.25 padding) — done imperatively via the Leaflet instance since
@@ -353,20 +444,29 @@ function RouteLayer({ route }: { route: VehicleRouteEntry[] }) {
       L.polyline(positions, { color: '#5B5FEF', weight: 2.5, opacity: 0.85, dashArray: '1 7', lineCap: 'round' }),
     )
 
+    // How many stops before this one share the exact same coordinate —
+    // determines this stop's position in the spiral around that point.
+    const seenAtCoordinate = new Map<string, number>()
+
     route.forEach((stop, i) => {
+      const coordKey = `${stop.latitude},${stop.longitude}`
+      const indexAtThisPoint = seenAtCoordinate.get(coordKey) ?? 0
+      seenAtCoordinate.set(coordKey, indexAtThisPoint + 1)
+      const [markerLat, markerLng] = offsetLatLngForIndex(map, stop.latitude, stop.longitude, indexAtThisPoint)
+
       const b = band(stop.similarity)
       const size = 24
       const html =
         `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${b.raw};` +
         `color:#fff;border:2px solid rgba(255,255,255,.6);box-shadow:0 2px 10px rgba(0,0,0,.45);` +
         `display:flex;align-items:center;justify-content:center;font:600 11px/1 Inter,sans-serif">${i + 1}</div>`
-      const marker = L.marker([stop.latitude, stop.longitude], {
+      const marker = L.marker([markerLat, markerLng], {
         icon: L.divIcon({ html, className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] }),
       })
-      marker.bindTooltip(`${stop.camera_name} · ${Math.round(stop.similarity * 100)}%`, {
-        direction: 'top',
-        offset: [0, -10],
-      })
+      marker.bindTooltip(
+        `${stop.camera_name} · ${Math.round(stop.similarity * 100)}% · ${format(new Date(stop.detected_at), 'HH:mm:ss')}`,
+        { direction: 'top', offset: [0, -10] },
+      )
       layerGroup.addLayer(marker)
     })
 

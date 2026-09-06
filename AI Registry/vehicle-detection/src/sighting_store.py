@@ -4,6 +4,7 @@ table on the existing Neon database. Reuses model1-service's DATABASE_URL
 rather than duplicating credentials — same approach as
 scripts/setup_database.py.
 """
+import math
 import os
 import socket
 import urllib.parse
@@ -11,6 +12,90 @@ from dataclasses import dataclass
 
 import numpy as np
 import psycopg2
+
+# Real, confirmed bug this constant fixes: find_route() previously ranked
+# candidates purely by embedding similarity with zero awareness of time
+# or distance, and produced routes implying speeds up to ~1.5 million
+# km/h between consecutive stops (measured directly against real,
+# already-ingested sighting data this session). 150 km/h is a generous
+# ceiling for road vehicles on Indian highways — real max speed limits
+# are lower (100-120 km/h on expressways) — chosen deliberately high so
+# this filter only rejects genuinely impossible jumps, not merely fast
+# ones, and never masks a real match by being too strict.
+MAX_PLAUSIBLE_SPEED_KMH = 150.0
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lng points, in kilometers."""
+    r_km = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r_km * math.asin(math.sqrt(a))
+
+
+def filter_plausible_route(sightings: list[dict], max_speed_kmh: float = MAX_PLAUSIBLE_SPEED_KMH) -> list[dict]:
+    """
+    Takes a list of sighting dicts already sorted chronologically
+    (ascending detected_at — the same order find_route's own SQL query
+    already returns) and drops any sighting that would require exceeding
+    max_speed_kmh to travel there from the immediately PRECEDING KEPT
+    sighting — not the immediately preceding one in the raw input, since
+    a rejected sighting must not itself become the (wrong) baseline for
+    judging the next one.
+
+    Greedy, not globally optimal: this walks forward once, keeping the
+    first sighting always, and for each next candidate either keeps it
+    (becomes the new baseline) or drops it (baseline stays where it was).
+    A full optimal-subsequence search (e.g. picking whichever kept path
+    maximizes total similarity) is real, deferred complexity — not
+    needed yet: this tool already labels every result "possible match,
+    not confirmed identification" (see the frontend's own copy), so a
+    simple, honest greedy filter that at least removes physically
+    impossible jumps is the right amount of complexity for what this
+    is — a rough route reconstruction aid, not a certified forensic tool.
+
+    Two sightings at the same camera (0 distance) are always plausible
+    regardless of elapsed time, including 0 elapsed time (two detections
+    in the same processing cycle) — dividing by a near-zero time delta
+    would otherwise produce a nonsensical infinite/huge speed for a
+    genuinely real, same-place case.
+    """
+    if not sightings:
+        return []
+
+    kept = [sightings[0]]
+    for candidate in sightings[1:]:
+        prev = kept[-1]
+        distance_km = _haversine_km(
+            prev["latitude"], prev["longitude"], candidate["latitude"], candidate["longitude"]
+        )
+        elapsed_hours = (candidate["detected_at"] - prev["detected_at"]).total_seconds() / 3600.0
+
+        if distance_km < 0.05:
+            # Same camera / effectively the same real-world point — always
+            # plausible, no speed calculation needed (and avoids a
+            # divide-by-zero for two same-cycle detections).
+            kept.append(candidate)
+            continue
+
+        if elapsed_hours <= 0:
+            # Non-positive elapsed time with real, nonzero distance is
+            # itself impossible (can't be two places at once, and the
+            # input is sorted ascending so this shouldn't occur for
+            # distinct timestamps) — reject rather than divide by zero.
+            continue
+
+        implied_speed_kmh = distance_km / elapsed_hours
+        if implied_speed_kmh <= max_speed_kmh:
+            kept.append(candidate)
+        # else: silently dropped — this candidate is kept out of the
+        # returned route, but the original DB row is untouched; a
+        # different, later-arriving query could still surface it if it's
+        # plausible relative to a different baseline.
+
+    return kept
 
 
 class SightingStoreError(Exception):
@@ -168,7 +253,13 @@ class SightingStore:
         finally:
             cur.close()
 
-    def find_route(self, embedding: np.ndarray, similarity_threshold: float, limit: int = 100) -> list:
+    def find_route(
+        self,
+        embedding: np.ndarray,
+        similarity_threshold: float,
+        limit: int = 100,
+        vehicle_class: str | None = None,
+    ) -> list:
         """
         Returns sightings considered "the same vehicle" as the given
         embedding — filtered to similarity >= similarity_threshold, sorted
@@ -189,12 +280,35 @@ class SightingStore:
         needing retuning once a better Re-ID model is trained. This method
         applies whatever threshold it's given; it does not judge whether
         that threshold is a good one.
+
+        The similarity-ranked candidates are then run through
+        filter_plausible_route() (see its own docstring) — a real,
+        confirmed bug this closes: without it, this method could and did
+        return routes implying travel at over a million km/h between
+        consecutive stops (confirmed directly against real, already-
+        ingested sighting data). A physically impossible jump is dropped
+        rather than silently presented as a real route segment.
         """
         embedding_list = embedding.tolist()
         cur = self._conn.cursor()
         try:
+            # Same-class guard: a car is never a truck. Measured on 150
+            # real stored embeddings from one camera, 51 pairs of
+            # DIFFERENT vehicle classes still cleared the old 0.80
+            # similarity bar — every one of those is unambiguously a
+            # false match, and no similarity threshold alone removes
+            # them. Filtering in SQL (not post-hoc in Python) means the
+            # LIMIT is spent on real candidates instead of being padded
+            # with cross-class noise. Skipped when vehicle_class is None
+            # so existing callers keep their previous behaviour exactly.
+            class_clause = "AND vs.vehicle_class = %s" if vehicle_class else ""
+            params = [embedding_list, embedding_list, similarity_threshold]
+            if vehicle_class:
+                params.append(vehicle_class)
+            params.append(limit)
+
             cur.execute(
-                """
+                f"""
                 SELECT
                     vs.vehicle_sighting_id,
                     vs.camera_id,
@@ -207,16 +321,18 @@ class SightingStore:
                 FROM vehicle_sighting vs
                 JOIN camera c ON c.camera_id = vs.camera_id
                 WHERE 1 - (vs.embedding <=> %s::vector) >= %s
+                {class_clause}
                 ORDER BY vs.detected_at ASC
                 LIMIT %s;
                 """,
-                (embedding_list, embedding_list, similarity_threshold, limit),
+                params,
             )
             columns = [
                 "sighting_id", "camera_id", "camera_name", "latitude", "longitude",
                 "detected_at", "vehicle_class", "similarity",
             ]
-            return [dict(zip(columns, row)) for row in cur.fetchall()]
+            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            return filter_plausible_route(rows)
         except Exception as e:
             raise SightingStoreError("QUERY_FAILED", f"Route query failed: {e}")
         finally:

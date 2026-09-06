@@ -16,7 +16,14 @@ export interface VehicleRouteEntry {
 
 export interface VehicleDetectionResult {
   vehicle_class: string
-  detection_confidence: number
+  // null specifically means the backend fell back to embedding the whole
+  // uploaded image directly (used_whole_image_fallback === true) --
+  // YOLO found zero real detections in it, so there is no genuine
+  // confidence score to report. Never a fabricated number standing in
+  // for a real one -- see vehicle-detection/src/api.py's own comment on
+  // this exact fallback.
+  detection_confidence: number | null
+  used_whole_image_fallback: boolean
   route?: VehicleRouteEntry[]
   route_threshold_used?: number
   error?: string

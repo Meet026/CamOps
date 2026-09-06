@@ -7,6 +7,7 @@ env var, same convention Phase 0 used for tests needing the real model
 file — skipped by default so the test suite doesn't require live
 database access, opt-in when actually verifying against a real instance.
 """
+import datetime
 import os
 import sys
 
@@ -14,7 +15,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from sighting_store import SightingStore, Sighting, SightingStoreError, _load_database_url
+from sighting_store import (
+    SightingStore, Sighting, SightingStoreError, _load_database_url,
+    filter_plausible_route, _haversine_km,
+)
 
 
 TEST_DATABASE_URL = os.environ.get("VEHICLE_DETECTION_TEST_DATABASE_URL")
@@ -172,3 +176,93 @@ def test_find_route_filters_by_threshold_and_sorts_chronologically():
         )
         cur.close()
         store.close()
+
+
+# --- filter_plausible_route: pure logic, no database needed, no gate ---
+
+
+def _sighting(name: str, lat: float, lng: float, minutes_offset: int) -> dict:
+    base = datetime.datetime(2026, 9, 5, 8, 0, 0, tzinfo=datetime.timezone.utc)
+    return {
+        "sighting_id": name,
+        "camera_name": name,
+        "latitude": lat,
+        "longitude": lng,
+        "detected_at": base + datetime.timedelta(minutes=minutes_offset),
+        "vehicle_class": "car",
+        "similarity": 0.85,
+    }
+
+
+def test_haversine_matches_known_real_distance():
+    # CN Vidhyalaya -> Suvidha Park, real coordinates from this project's
+    # own camera table (looked up directly, not guessed, and cross-checked
+    # against this session's own earlier independent calculation of this
+    # exact pair, which also got ~108.8km).
+    d = _haversine_km(23.020556, 72.551667, 22.3850051, 71.745261)
+    assert 107 < d < 110  # real straight-line distance is ~108.8km
+
+
+def test_filter_keeps_a_single_sighting():
+    route = [_sighting("A", 23.0, 72.5, 0)]
+    assert filter_plausible_route(route) == route
+
+
+def test_filter_keeps_realistic_consecutive_stops():
+    # ~11km apart (Visat P2 -> CN Vidhyalaya, real distance measured this
+    # session), 2 hours apart -- a perfectly ordinary driving speed.
+    route = [
+        _sighting("Visat P2", 23.1193, 72.5657, 0),
+        _sighting("CN Vidhyalaya", 23.0206, 72.5517, 120),
+    ]
+    result = filter_plausible_route(route)
+    assert len(result) == 2
+
+
+def test_filter_drops_the_real_impossible_jump_this_bug_report_found():
+    # The exact real case measured this session against this project's
+    # actual, already-ingested data: CN Vidhyalaya -> Hero Showroom Gir
+    # Somnath, 18 SECONDS apart, implying ~1.5 million km/h -- confirmed
+    # impossible. (Hero Showroom Gir Somnath's real coordinates in this
+    # project's own camera table are (0, 0) -- itself a separate, real
+    # data-quality issue, an unresolved-geocode placeholder, not
+    # something this filter fixes -- but it's exactly the case this
+    # filter must correctly reject regardless of WHY the jump looks
+    # impossible.) The baseline for judging the NEXT candidate must
+    # remain the last genuinely KEPT stop (CN Vidhyalaya), not the
+    # rejected one.
+    route = [
+        _sighting("CN Vidhyalaya", 23.020556, 72.551667, 0),
+        _sighting("Hero Showroom Gir Somnath", 0.0, 0.0, 0.3),  # 18s later
+        _sighting("Suvidha Park", 22.3850051, 71.745261, 60),  # a real, plausible stop from CN Vidhyalaya's baseline
+    ]
+    result = filter_plausible_route(route)
+    kept_names = [r["camera_name"] for r in result]
+    assert kept_names == ["CN Vidhyalaya", "Suvidha Park"]
+
+
+def test_filter_treats_same_camera_as_always_plausible_regardless_of_time_gap():
+    # Two detections at the exact same camera, one second apart -- a real,
+    # ordinary case (two vehicles/frames processed in the same cycle),
+    # must never be rejected as "impossible speed" (which a naive
+    # distance/time division would compute as 0/~0 -> NaN or a spurious
+    # huge number depending on floating-point rounding).
+    route = [
+        _sighting("CN Vidhyalaya", 23.020556, 72.551667, 0),
+        _sighting("CN Vidhyalaya", 23.020556, 72.551667, 1 / 60),  # 1 second later
+    ]
+    result = filter_plausible_route(route)
+    assert len(result) == 2
+
+
+def test_filter_respects_custom_max_speed():
+    # 100km apart in 1 hour = 100km/h -- plausible at the default 150
+    # ceiling, but must be rejected under a stricter, explicitly-passed
+    # 80 km/h ceiling -- proves max_speed_kmh is a real, honored parameter,
+    # not a hardcoded value with a dead argument.
+    route = [
+        _sighting("A", 22.0, 72.0, 0),
+        _sighting("B", 22.9, 72.0, 60),  # ~100km north, 60 min later
+    ]
+    assert len(filter_plausible_route(route, max_speed_kmh=150.0)) == 2
+    assert len(filter_plausible_route(route, max_speed_kmh=80.0)) == 1
