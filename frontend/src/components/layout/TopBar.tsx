@@ -5,6 +5,7 @@ import { usePageHeader } from '@/contexts/PageHeaderContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { useTheme } from '@/contexts/ThemeContext'
 import { CommandPalette } from './CommandPalette'
+import { AlertBell } from './AlertBell'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +78,8 @@ export function TopBar() {
           <span className="h-[7px] w-[7px] rounded-full bg-[var(--color-status-online)] shadow-[0_0_0_3px_rgba(34,197,94,0.16)]" />
           Synced
         </div>
+
+        <AlertBell />
 
         <div className="flex rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] p-0.5">
           <button

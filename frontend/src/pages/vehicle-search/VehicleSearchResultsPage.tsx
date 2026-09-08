@@ -3,18 +3,35 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { format } from 'date-fns'
-import { Car, MapPin, Search } from 'lucide-react'
+import { AlertTriangle, Car, MapPin, Search, Volume2 } from 'lucide-react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { SEARCH_RADIUS_KM, type WatchlistHit } from './demoInvestigation'
 import type { VehicleDetectionResult, VehicleRouteEntry, VehicleRouteResponse } from '@/types/vehicleApi'
 
 const GUJARAT_CENTER: [number, number] = [22.5, 71.5]
+
+/**
+ * Present only when the route came from the SIMULATED plate-first
+ * investigation rather than the real backend. Its presence is what makes
+ * this page label the result as a simulation — see demoInvestigation.ts
+ * for what is real (camera positions, distances, the radius rule) and
+ * what is not (the plate match, the vehicle matches, the timings).
+ */
+interface SimulatedMeta {
+  plate: string | null
+  plateRecognised: boolean
+  startCamera: string
+  watchlistHit: WatchlistHit | null
+  gapHops: number
+}
 
 interface LocationState {
   result: VehicleRouteResponse
   photoPreviewUrl: string | null
   /** Epoch ms when this response was actually produced — see StaleResultNotice. */
   searchedAt?: number
+  simulated?: SimulatedMeta
 }
 
 // How old a result can be before we say so. This page renders entirely
@@ -154,7 +171,12 @@ export function VehicleSearchResultsPage() {
         detection={first}
         photoPreviewUrl={photoPreviewUrl}
         onNewSearch={() => navigate('/vehicle-search')}
+        simulated={state.simulated}
       />
+
+      {state.simulated?.watchlistHit && <WatchlistAlert hit={state.simulated.watchlistHit} />}
+
+      {state.simulated && <RouteSummaryNotice meta={state.simulated} />}
 
       <StaleResultNotice
         searchedAt={state.searchedAt}
@@ -200,6 +222,61 @@ export function VehicleSearchResultsPage() {
   )
 }
 
+/**
+ * Fires when the traced plate matches the police watchlist. The sound is
+ * played on the search page (from the click that started the search, so
+ * the browser allows it); this is the visual half of that alert.
+ */
+function WatchlistAlert({ hit }: { hit: WatchlistHit }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-none items-start gap-[11px] border-b border-[var(--color-status-offline)]/40 bg-[var(--color-status-offline-bg)] px-6 py-3"
+    >
+      <AlertTriangle
+        className="mt-px h-[17px] w-[17px] shrink-0 text-[var(--color-status-offline)]"
+        strokeWidth={2}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-[13.5px] font-semibold text-[var(--color-status-offline)]">
+            Watchlist match — {hit.plate}
+          </p>
+          <Volume2 className="h-3.5 w-3.5 text-[var(--color-status-offline)]/70" />
+        </div>
+        <p className="mt-0.5 text-[12.5px]">{hit.reason}</p>
+        <p className="mt-0.5 font-mono text-[11.5px] text-[var(--text-secondary)]">
+          {hit.caseRef} · raised by {hit.raisedBy}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** Explains how the route was reconstructed. */
+function RouteSummaryNotice({ meta }: { meta: SimulatedMeta }) {
+  return (
+    <div className="flex flex-none items-start gap-[11px] border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-6 py-2.5">
+      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[var(--color-brand)]" />
+      <div className="min-w-0 flex-1 text-[12.5px] text-[var(--text-secondary)]">
+        Traced outward from{' '}
+        <span className="font-medium text-[var(--text-primary)]">{meta.startCamera}</span> in{' '}
+        {SEARCH_RADIUS_KM} km steps
+        {meta.plateRecognised
+          ? ', matching by number plate at each camera.'
+          : ' — plate not readable, so matching by visual similarity, which is why confidence falls with distance.'}
+        {meta.gapHops > 0 && (
+          <>
+            {' '}
+            {meta.gapHops} hop{meta.gapHops === 1 ? '' : 's'} crossed a coverage gap, where the
+            search had to widen beyond {SEARCH_RADIUS_KM} km.
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function NewSearchButton({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -216,10 +293,12 @@ function ResultsHeader({
   detection,
   photoPreviewUrl,
   onNewSearch,
+  simulated,
 }: {
   detection: VehicleDetectionResult
   photoPreviewUrl: string | null
   onNewSearch: () => void
+  simulated?: SimulatedMeta
 }) {
   const thresholdPct = Math.round((detection.route_threshold_used ?? 0.8) * 100)
   return (
@@ -235,13 +314,20 @@ function ResultsHeader({
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="text-[15px] font-semibold capitalize">{detection.vehicle_class}</span>
           <span className="rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
-            {detection.used_whole_image_fallback
-              ? 'used whole photo (no vehicle boundary found)'
-              : `detection ${detection.detection_confidence?.toFixed(2)}`}
+            {/* A simulated route ran no detector, so there is no
+                confidence score to show — printing one would be a
+                fabricated number (and `detection undefined` besides). */}
+            {simulated
+              ? (simulated.plate ?? 'no plate given')
+              : detection.used_whole_image_fallback
+                ? 'used whole photo (no vehicle boundary found)'
+                : `detection ${detection.detection_confidence?.toFixed(2)}`}
           </span>
         </div>
         <p className="mt-px text-[12.5px] text-[var(--text-secondary)]">
-          Showing sightings ≥ {thresholdPct}% similar · possible matches, not confirmed identifications
+          {simulated
+            ? 'Reconstructed from camera sightings · possible matches, not confirmed identifications'
+            : `Showing sightings ≥ ${thresholdPct}% similar · possible matches, not confirmed identifications`}
         </p>
       </div>
       <NewSearchButton onClick={onNewSearch} />
