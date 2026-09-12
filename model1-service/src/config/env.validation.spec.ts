@@ -7,6 +7,7 @@ describe('validateEnv', () => {
     JWT_EXPIRY: '15m',
     REFRESH_TOKEN_SECRET: 'b'.repeat(32),
     REFRESH_TOKEN_EXPIRY: '7d',
+    TOTP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'), // real 32-byte key
     CORS_ALLOWED_ORIGINS: 'http://localhost:5173',
     PORT: '3000',
     NODE_ENV: 'development',
@@ -44,5 +45,16 @@ describe('validateEnv', () => {
     const { NODE_ENV, ...rest } = validConfig;
     const result = validateEnv(rest);
     expect(result.NODE_ENV).toBe('development');
+  });
+
+  it('throws when TOTP_ENCRYPTION_KEY is missing', () => {
+    const { TOTP_ENCRYPTION_KEY, ...rest } = validConfig;
+    expect(() => validateEnv(rest)).toThrow();
+  });
+
+  it('throws when TOTP_ENCRYPTION_KEY does not decode to exactly 32 bytes', () => {
+    expect(() =>
+      validateEnv({ ...validConfig, TOTP_ENCRYPTION_KEY: 'too-short' }),
+    ).toThrow();
   });
 });

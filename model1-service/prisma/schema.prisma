@@ -57,6 +57,17 @@ model AppUser {
   departmentId String?  @map("department_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
+  // TOTP two-factor authentication (see docs/superpowers/specs/2026-09-12-totp-two-factor-auth-design.md).
+  // totpSecret is AES-256-GCM encrypted, never stored/logged in plaintext —
+  // unlike passwordHash/backup-code hashes, it must be reversible so the
+  // server can compute the expected code, so it can't be one-way hashed.
+  // totpEnabled stays false while a secret exists but hasn't been confirmed
+  // yet (see AuthController.confirm) — scanning a QR code alone never turns
+  // on enforcement.
+  totpSecret    String?   @map("totp_secret")
+  totpEnabled   Boolean   @default(false) @map("totp_enabled")
+  totpEnabledAt DateTime? @map("totp_enabled_at") @db.Timestamptz
+
   department Department? @relation(fields: [departmentId], references: [departmentId])
 
   camerasCreated       Camera[]              @relation("CameraCreatedBy")
@@ -64,8 +75,29 @@ model AppUser {
   auditLogs            AuditLog[]
   refreshTokens        RefreshToken[]
   bulkUploadJobs       BulkUploadJob[]
+  totpBackupCodes      TotpBackupCode[]
 
   @@map("app_user")
+}
+
+// ----------------------------------------------------------------------------
+// TOTP Backup Code
+// ----------------------------------------------------------------------------
+// One-time-use recovery codes issued when 2FA is confirmed enabled (10 at a
+// time) — the standard fallback for "I lost my phone." Hashed with bcrypt,
+// exactly like a password: unlike totpSecret, a backup code is consumed once
+// and never needed again, so it should never be recoverable in plaintext.
+model TotpBackupCode {
+  backupCodeId String    @id @default(dbgenerated("gen_random_uuid()")) @map("backup_code_id") @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  codeHash     String    @map("code_hash")
+  usedAt       DateTime? @map("used_at") @db.Timestamptz
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user AppUser @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("totp_backup_code")
 }
 
 // ----------------------------------------------------------------------------

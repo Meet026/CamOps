@@ -7,8 +7,31 @@ import {
   IsString,
   Max,
   Min,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
   validateSync,
 } from 'class-validator';
+
+// Must decode (as base64) to exactly 32 raw bytes — AES-256-GCM requires a
+// 256-bit key. Generate one with `openssl rand -base64 32`. Validated here
+// (not just "is a non-empty string") so a misconfigured key fails fast at
+// boot, not silently at the first TOTP encrypt/decrypt call in production.
+@ValidatorConstraint({ name: 'isBase64EncodedAes256Key', async: false })
+class IsBase64EncodedAes256KeyConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    try {
+      return Buffer.from(value, 'base64').length === 32;
+    } catch {
+      return false;
+    }
+  }
+
+  defaultMessage(): string {
+    return 'TOTP_ENCRYPTION_KEY must be a base64-encoded 32-byte key (e.g. from `openssl rand -base64 32`)';
+  }
+}
 
 export enum NodeEnv {
   Development = 'development',
@@ -36,6 +59,11 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   REFRESH_TOKEN_EXPIRY: string = '7d';
+
+  @IsString()
+  @IsNotEmpty()
+  @Validate(IsBase64EncodedAes256KeyConstraint)
+  TOTP_ENCRYPTION_KEY!: string;
 
   @IsString()
   @IsOptional()

@@ -6,6 +6,9 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { TotpService } from './totp/totp.service';
+import { TotpChallengeJwtService } from './totp/totp-challenge-jwt.service';
+import { TotpBackupCodeService } from './totp/totp-backup-code.service';
 import { UsersModule } from '../users/users.module';
 import { AuditContextModule } from '../common/context/audit-context.module';
 
@@ -32,6 +35,18 @@ import { AuditContextModule } from '../common/context/audit-context.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, RefreshTokenService, JwtStrategy],
+  providers: [
+    AuthService,
+    RefreshTokenService,
+    JwtStrategy,
+    TotpChallengeJwtService,
+    TotpBackupCodeService,
+    {
+      provide: TotpService,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService): TotpService =>
+        new TotpService(configService.get<string>('totp.encryptionKey')!),
+    },
+  ],
 })
 export class AuthModule {}

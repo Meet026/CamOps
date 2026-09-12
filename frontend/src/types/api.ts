@@ -13,13 +13,38 @@ export interface AuthenticatedUser {
   departmentId: string | null;
 }
 
-export interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-}
+// Login now branches on whether the account has 2FA enabled: either the
+// normal token pair, or a short-lived mfaToken that must be exchanged via
+// POST /auth/totp/verify for the real tokens.
+export type LoginResponse =
+  | { accessToken: string; refreshToken: string; mfaRequired?: false }
+  | { mfaRequired: true; mfaToken: string };
 
 export interface RefreshResponse {
   accessToken: string;
+}
+
+// ----------------------------------------------------------------------------
+// TOTP two-factor authentication
+// ----------------------------------------------------------------------------
+
+export interface TotpStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+}
+
+export interface TotpSetupResponse {
+  secret: string;
+  otpauthUrl: string;
+}
+
+export interface TotpConfirmResponse {
+  backupCodes: string[];
+}
+
+export interface TotpVerifyResponse {
+  accessToken: string;
+  refreshToken: string;
 }
 
 export interface ApiErrorBody {

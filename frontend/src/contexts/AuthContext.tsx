@@ -6,6 +6,12 @@ import { decodeJwtPayload, getMsUntilExpiry } from '@/lib/jwt'
 import type { AuthenticatedUser } from '@/types/api'
 import type { UserProfile } from '@/api/auth'
 
+// Either login completed outright, or the account has 2FA enabled and the
+// caller must go collect a code next (LoginPage keeps mfaToken in local
+// component state — never in the token store — and calls completeTotpLogin
+// once the user submits a valid code).
+export type LoginResult = { mfaRequired: false } | { mfaRequired: true; mfaToken: string }
+
 interface AuthContextValue {
   user: AuthenticatedUser | null
   // The richer /auth/me-sourced profile (adds email, which the JWT payload
@@ -15,7 +21,8 @@ interface AuthContextValue {
   profile: UserProfile | null
   isAuthenticated: boolean
   isInitializing: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<LoginResult>
+  completeTotpLogin: (mfaToken: string, code: string) => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -101,8 +108,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     staleTime: 5 * 60 * 1000,
   })
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     const result = await authApi.login(email, password)
+    if (result.mfaRequired) {
+      return { mfaRequired: true, mfaToken: result.mfaToken }
+    }
+    setTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken })
+    return { mfaRequired: false }
+  }, [])
+
+  const completeTotpLogin = useCallback(async (mfaToken: string, code: string) => {
+    const result = await authApi.verifyTotp(mfaToken, code)
     setTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken })
   }, [])
 
@@ -127,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated,
         isInitializing,
         login,
+        completeTotpLogin,
         logout,
       }}
     >

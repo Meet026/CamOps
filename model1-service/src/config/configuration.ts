@@ -12,6 +12,9 @@ export default () => ({
     secret: process.env.REFRESH_TOKEN_SECRET,
     expiry: process.env.REFRESH_TOKEN_EXPIRY ?? '7d',
   },
+  totp: {
+    encryptionKey: process.env.TOTP_ENCRYPTION_KEY,
+  },
   cors: {
     allowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? '')
       .split(',')

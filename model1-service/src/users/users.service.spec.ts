@@ -147,4 +147,43 @@ describe('UsersService', () => {
       });
     });
   });
+
+  describe('setPendingTotpSecret', () => {
+    it('writes the encrypted secret without enabling enforcement', async () => {
+      prisma.appUser.update.mockResolvedValue({});
+
+      await service.setPendingTotpSecret('user-1', 'encrypted-secret-value');
+
+      expect(prisma.appUser.update).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        data: { totpSecret: 'encrypted-secret-value' },
+      });
+    });
+  });
+
+  describe('enableTotp', () => {
+    it('sets totpEnabled true and stamps totpEnabledAt', async () => {
+      prisma.appUser.update.mockResolvedValue({});
+
+      await service.enableTotp('user-1');
+
+      expect(prisma.appUser.update).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        data: { totpEnabled: true, totpEnabledAt: expect.any(Date) },
+      });
+    });
+  });
+
+  describe('disableTotp', () => {
+    it('clears the secret, enabled flag, and enabledAt timestamp', async () => {
+      prisma.appUser.update.mockResolvedValue({});
+
+      await service.disableTotp('user-1');
+
+      expect(prisma.appUser.update).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        data: { totpSecret: null, totpEnabled: false, totpEnabledAt: null },
+      });
+    });
+  });
 });

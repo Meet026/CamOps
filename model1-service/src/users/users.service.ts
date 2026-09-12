@@ -67,4 +67,26 @@ export class UsersService {
   async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {
     await this.prisma.appUser.update({ where: { userId }, data: { passwordHash } });
   }
+
+  // Writes an (already-encrypted) TOTP secret without turning on
+  // enforcement — totpEnabled only flips true once AuthService.confirmTotp
+  // verifies a real code against this pending secret. See
+  // docs/superpowers/specs/2026-09-12-totp-two-factor-auth-design.md §4.
+  async setPendingTotpSecret(userId: string, encryptedSecret: string): Promise<void> {
+    await this.prisma.appUser.update({ where: { userId }, data: { totpSecret: encryptedSecret } });
+  }
+
+  async enableTotp(userId: string): Promise<void> {
+    await this.prisma.appUser.update({
+      where: { userId },
+      data: { totpEnabled: true, totpEnabledAt: new Date() },
+    });
+  }
+
+  async disableTotp(userId: string): Promise<void> {
+    await this.prisma.appUser.update({
+      where: { userId },
+      data: { totpSecret: null, totpEnabled: false, totpEnabledAt: null },
+    });
+  }
 }

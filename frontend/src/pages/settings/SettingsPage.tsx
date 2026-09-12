@@ -16,6 +16,7 @@ import * as usersApi from '@/api/users'
 import * as authApi from '@/api/auth'
 import * as vehiclesApi from '@/api/vehicles'
 import type { AppRole } from '@/types/api'
+import { TwoFactorAuthSection } from './TwoFactorAuthSection'
 
 const ROLE_LABEL: Record<AppRole, string> = {
   admin: 'Administrator',
@@ -110,6 +111,7 @@ function AccountSection() {
             </button>
           </div>
         </div>
+        <TwoFactorAuthSection />
         <div className="border-t border-[var(--border-default)] px-5 py-[18px]">
           <button
             onClick={() => logout()}
