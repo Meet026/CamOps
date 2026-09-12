@@ -1,11 +1,16 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ImagePlus, Loader2 } from 'lucide-react'
+import { ImagePlus, Loader2, ShieldAlert } from 'lucide-react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useVehicleRouteSearch } from '@/hooks/useVehicleSearch'
 import { getVehicleApiErrorMessage, getVehicleApiErrorStatus } from '@/api/vehicleClient'
+import { getApiErrorMessage } from '@/api/client'
+import * as wantedListApi from '@/api/wantedList'
+import { WantedMatchToast } from '@/components/shared/WantedMatchToast'
+import { playWantedMatchAlert } from '@/lib/alert-sound'
 import { CropOverlay, DEFAULT_CROP_RECT, cropImageToFile, type CropRect } from './CropOverlay'
 import type { VehicleRouteResponse } from '@/types/vehicleApi'
+import type { CheckPlateResult } from '@/types/api'
 
 // Pixel-matched to the reference (Sentinel.dc.html) Vehicle Search screen:
 // dashed drop zone -> crop step (draggable frame, corner handles,
@@ -21,7 +26,32 @@ export function VehicleSearchPage() {
   const [cropRect, setCropRect] = useState<CropRect>(DEFAULT_CROP_RECT)
   const searchMutation = useVehicleRouteSearch()
 
+  const [plateInput, setPlateInput] = useState('')
+  const [plateResult, setPlateResult] = useState<CheckPlateResult | null>(null)
+  const [plateError, setPlateError] = useState<string | null>(null)
+  const [isCheckingPlate, setIsCheckingPlate] = useState(false)
+  const [showMatchToast, setShowMatchToast] = useState(false)
+
   usePageTitle('Vehicle Search')
+
+  const handleCheckPlate = async () => {
+    if (!plateInput.trim()) return
+    setIsCheckingPlate(true)
+    setPlateError(null)
+    setPlateResult(null)
+    try {
+      const result = await wantedListApi.checkPlate(plateInput)
+      setPlateResult(result)
+      if (result.matched) {
+        setShowMatchToast(true)
+        playWantedMatchAlert()
+      }
+    } catch (err) {
+      setPlateError(getApiErrorMessage(err, 'Could not check this plate right now.'))
+    } finally {
+      setIsCheckingPlate(false)
+    }
+  }
 
   const handlePhotoSelect = (file: File) => {
     setStagedPhoto(file)
@@ -73,6 +103,12 @@ export function VehicleSearchPage() {
 
   return (
     <div className="p-9 pb-[72px]">
+      {showMatchToast && plateResult?.wantedVehicle && (
+        <WantedMatchToast
+          wantedVehicle={plateResult.wantedVehicle}
+          onDismiss={() => setShowMatchToast(false)}
+        />
+      )}
       <div className="mx-auto max-w-[720px]">
         <div className="mb-1.5 flex items-center gap-2.5">
           <p className="text-[22px] font-semibold tracking-tight">Vehicle search</p>
@@ -84,6 +120,63 @@ export function VehicleSearchPage() {
           Upload a photo of one vehicle to search past camera sightings. Results are possible matches
           ranked by visual similarity, not confirmed identifications.
         </p>
+
+        <div className="mb-6 rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4">
+          <p className="text-[13.5px] font-semibold">Check a plate number against the wanted list</p>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            Exact plate match only — this checks against wanted-list records maintained by departments.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input
+              value={plateInput}
+              onChange={(e) => {
+                setPlateInput(e.target.value)
+                setPlateResult(null)
+                setPlateError(null)
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleCheckPlate()}
+              placeholder="e.g. GJ01AB1234"
+              className="h-10 min-w-[200px] flex-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-canvas)] px-3 font-mono text-sm uppercase tracking-wide placeholder:normal-case placeholder:tracking-normal placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+            />
+            <button
+              type="button"
+              onClick={handleCheckPlate}
+              disabled={isCheckingPlate || !plateInput.trim()}
+              className="flex h-10 items-center gap-2 rounded-lg border border-transparent bg-[var(--color-brand)] px-4 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {isCheckingPlate && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Check plate
+            </button>
+          </div>
+
+          {plateError && <p className="mt-3 text-sm text-[var(--color-status-offline)]">{plateError}</p>}
+
+          {plateResult && plateResult.matched && plateResult.wantedVehicle && (
+            <div className="mt-3 overflow-hidden rounded-[10px] border border-[var(--color-status-offline)]">
+              <div className="flex items-center gap-2 bg-[var(--color-status-offline)] px-3.5 py-1.5">
+                <ShieldAlert className="h-3.5 w-3.5 text-white" />
+                <span className="text-[11.5px] font-bold uppercase tracking-wide text-white">
+                  Wanted list alert
+                </span>
+              </div>
+              <div className="bg-[var(--color-status-offline-bg)] px-3.5 py-3">
+                <p className="font-mono text-[14px] font-semibold tracking-wide">
+                  {plateResult.wantedVehicle.plateNumber}
+                </p>
+                <p className="mt-1 text-[13px] font-medium">{plateResult.wantedVehicle.personName}</p>
+                <p className="mt-0.5 text-[12.5px] text-[var(--text-secondary)]">
+                  {plateResult.wantedVehicle.crimeDetails}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {plateResult && !plateResult.matched && (
+            <p className="mt-3 text-sm text-[var(--color-status-online)]">
+              No match — this plate is not on the wanted list.
+            </p>
+          )}
+        </div>
 
         {step === 'idle' && (
           <label className="flex cursor-pointer flex-col items-center justify-center gap-2.5 rounded-[10px] border border-dashed border-[var(--border-strong)] bg-[var(--bg-surface)] px-6 py-14 text-center">

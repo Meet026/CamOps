@@ -1,222 +1,293 @@
-# Sentinel — Demo Video Script, Storytelling Version (~5 minutes)
+# Sentinel — Demo Video Script (~6 minutes)
 
-Same facts, same features, same honest caveats as before — told as one
-continuous scene instead of a feature tour. Speak it like you're telling
-someone what happened last night, not presenting slides. Let pauses breathe;
-you don't need to fill every second with words.
+## How to read this file
 
-**Before recording:** log in as an admin, and make sure all services
-(backend, frontend, video-stream relay) are running. Do one silent
-walkthrough first so nothing surprises you on camera.
+Every beat below has exactly two labels:
 
----
+- **SAY:** — this is the ONLY part you speak out loud. Read it slowly and
+  naturally, like you're telling someone a story, not presenting slides.
+  It's okay to pause between sentences.
+- **DO:** — this is what you click or type on the screen, either just
+  before or while you say the line. You never speak the DO lines out
+  loud — they are instructions for your hands, not your voice.
 
-## 0. Cold open (0:00 – 0:20)
-
-_[Screen: Login page]_
-
-> "It's late. A call comes in — a vehicle involved in an incident, last seen
-> near a busy junction in the city. The officer on duty doesn't know that
-> junction's cameras. They don't know if those cameras even work today. And
-> right now, across 26-plus government departments, nobody has one shared
-> answer to that. That's the gap Sentinel closes. Let me show you the night
-> this could have gone differently."
-
-_Log in._
+**Before recording:** log in as an admin, and make sure the backend, the
+frontend, and the video-stream service are all running. Have the demo
+account's authenticator app open (or a backup code ready), and make sure at
+least one plate number is already saved on the wanted list (for example
+`GJ01AB1234`). Do one quiet practice run first, without recording, so
+nothing catches you by surprise on camera.
 
 ---
 
-## 1. The first thing she sees (0:20 – 0:40)
+## 0. Cold open (0:00 – 0:35)
 
-_[Screen: Overview page]_
+**DO:** Start on the Login page. Don't type anything yet.
 
-> "She logs in, and this is what greets her — not a wall of menus, one
-> screen. How many cameras exist. How many are online right now. How many
-> are quietly at risk of going dark. And how many AI suggestions are
-> waiting on a human to confirm them. In five seconds, she knows the state
-> of the whole network."
+**SAY:**
+> "It's late at night. A call comes in about a vehicle involved in an
+> incident. It was last seen near a busy junction in the city. The problem
+> is, the officer on duty doesn't know which cameras are near that
+> junction. They don't even know if those cameras are working today. And
+> right now, across more than twenty-six different government departments,
+> nobody has one single, shared place to find that out. That is the exact
+> gap that Sentinel is built to close. Let me show you how tonight could go
+> differently."
 
----
+**DO:** Type the email and password, and click Sign in. The screen will
+change and ask for a six-digit verification code.
 
-## 2. Finding the camera that matters (0:40 – 1:25)
+**SAY:**
+> "But before she can do anything at all, she has to log in safely. A
+> password by itself was never enough protection for a police system. So
+> right after her password, it asks for one more thing — a six-digit code
+> from an authenticator app on her phone. This code changes every thirty
+> seconds, so even if someone stole her password, they still could not get
+> in without her phone too."
 
-_[Screen: Camera list page]_
-
-> "She needs the camera near that junction. This is the registry — every
-> camera any department has ever registered, its status, how hard it'd be
-> to plug into deeper analysis, and who owns it."
-
-_Type into the search bar._
-
-> "She types the street name. It's there in an instant — search reaches the
-> camera's name and its address both."
-
-_Click Add Camera / open the form._
-
-> "And when a field officer finds a camera that was never logged? Adding one
-> takes seconds — a name, a department, and a location captured with one tap
-> of GPS on their phone. Type in the brand and model, and the system quietly
-> tells you how hard this camera will be to integrate — easy, medium, hard,
-> or an honest 'needs a person to check' — no technical knowledge required."
-
-_Show Edit and Delete._
-
-> "Nothing here is ever truly erased, either. Remove a camera and it's
-> marked inactive, not deleted — because this record might need to hold up
-> as evidence one day."
-
-_Show Bulk Upload page._
-
-> "And when a whole department needs to onboard hundreds of existing
-> cameras at once? One spreadsheet, dropped in here, processed in the
-> background — with a live bar showing exactly which rows succeeded and
-> which didn't, instead of one bad row freezing everything."
+**DO:** Type the six-digit code and submit it. You will land on the
+Overview page.
 
 ---
 
-## 3. Seeing the whole picture (1:25 – 2:05)
+## 1. The first thing she sees (0:35 – 1:00)
 
-_[Screen: GIS Map page]_
+**DO:** Stay on the Overview page. Nothing to click here.
 
-> "She switches to the map. Every camera, exactly where it really sits,
-> color-coded by whether it's alive or how ready it is to integrate."
-
-_Toggle the Coverage Gap overlay._
-
-> "This overlay is the quiet, important one — it grids the whole region and
-> shows where there's no camera at all. Not a guess. A live calculation
-> against real registered cameras — so as departments add more, these gaps
-> genuinely close."
-
-_Toggle the Heatmap overlay._
-
-> "And this layer shows where incidents cluster — so the next camera gets
-> placed where it's actually needed, not just wherever's convenient."
+**SAY:**
+> "The moment she logs in, this is the very first screen she sees. It's not
+> a confusing list of menus — it's one simple screen that tells her
+> everything important at a glance. How many cameras exist in total. How
+> many of them are online right now. How many look like they might be
+> quietly failing. And how many AI suggestions are sitting there, waiting
+> for a person to double-check them. In about five seconds, she already
+> understands the health of the entire camera network."
 
 ---
 
-## 4. A face on the feed (2:05 – 2:25)
+## 2. Finding the camera that matters (1:00 – 1:50)
 
-_[Screen: Live Stream page]_
+**DO:** Go to the Cameras page.
 
-> "She doesn't just need to know a camera exists — sometimes she needs to
-> see through it, right now."
+**SAY:**
+> "Now she needs to find the camera closest to that junction. This page is
+> the full registry — every single camera that any department has ever
+> added, along with its status, how easy or hard it would be to plug into
+> deeper video analysis, and which department owns it."
 
-_Click into one camera._
+**DO:** Type a street name into the search bar.
 
-> "One click, and she's watching that junction live, in the browser. No
-> separate video system to open."
+**SAY:**
+> "She simply types the street name, and it shows up right away."
 
----
+**DO:** Click "Add Camera" to open the form.
 
-## 5. The camera that's been quiet, and the trail behind everything (2:25 – 2:55)
+**SAY:**
+> "And what if a field officer finds a camera out in the world that was
+> never added to the system before? Adding it only takes a few seconds —
+> just a name, the department it belongs to, and the exact location, which
+> can be captured with one tap using the phone's GPS. If she also types in
+> the camera's brand and model, the system quietly figures out on its own
+> how difficult this camera will be to connect to deeper analysis later —
+> easy, medium, hard, or an honest 'someone needs to check this by hand.'
+> She doesn't need any technical background to understand the answer."
 
-_[Screen: Health page]_
+**DO:** Show the Edit and Delete buttons on a camera, then open the Bulk
+Upload page.
 
-> "Here's a fact that should worry everyone — studies show 30 to 40 percent
-> of government CCTV cameras are dead at any given moment, and nobody's
-> watching to notice. Sentinel checks every camera's pulse on a schedule,
-> and flags anything that keeps going dark as 'at risk' — so a broken camera
-> gets a repair ticket instead of years of silence."
-
-_[Screen: Audit Log page]_
-
-> "And behind her, every single thing anyone has done in this system —
-> every login, every edit, every deletion — is written down automatically.
-> Who, when, from where, and exactly what changed. For a police system,
-> that trail isn't a nice-to-have. It's the whole point."
-
----
-
-## 6. Who gets to see what (2:55 – 3:15)
-
-_[Screen: Settings page]_
-
-> "Behind the scenes, admins decide exactly who sees what — a field officer,
-> a department viewer, an auditor — each with precisely the access their job
-> needs, nothing more."
-
-_Toggle dark/light theme._
-
-> "Small touch, but a real one — light or dark, for whatever hour she's
-> working."
+**SAY:**
+> "One more important detail — nothing here is ever truly erased. If a
+> camera is removed, it's simply marked as inactive, not deleted, because
+> this record might be needed as evidence later on. And if an entire
+> department needs to add hundreds of existing cameras all at once, they
+> can just upload one spreadsheet. It processes everything in the
+> background and shows a live progress bar, so one single bad row in that
+> file doesn't stop the whole upload from working."
 
 ---
 
-## 7. The vehicle (3:15 – 3:55)
+## 3. Seeing the whole picture (1:50 – 2:25)
 
-_[Screen: Vehicle Search page]_
+**DO:** Go to the Map page.
 
-> "Now — back to that vehicle. She has a plate number, and she knows the
-> last camera that saw it. She types both in."
+**SAY:**
+> "Now let's zoom out and look at the map. Every camera is shown exactly
+> where it really sits in the city, and it's color-coded so she can
+> instantly tell which ones are working and which ones need attention."
 
-_Enter plate `GJ01AB1234`, select camera "Navrangpura Cross Roads", submit.
-Let the staged processing play out, then the route renders._
+**DO:** Toggle on the Coverage Gap overlay, then toggle on the Heatmap
+overlay.
 
-> "And the system reaches outward through the real camera network — real
-> distances, real timestamps — and lays out where that vehicle has been."
-
----
-
-## 8. The alert that finds you first (3:55 – 4:10)
-
-_[Screen: point at the bell icon in the top bar, next to "Synced"]_
-
-> "And imagine she never had to search at all — this bell watches every
-> camera, around the clock, and would have told her the moment that vehicle
-> appeared. Same honest note: the alert logic is ready and waiting on that
-> same recognition model."
+**SAY:**
+> "This first layer is a quiet but very important one — it divides the
+> whole region into a grid and highlights the areas that have no camera
+> coverage at all. This isn't a rough guess. It's a real, live calculation
+> based on the cameras that are actually registered, so as more departments
+> add their cameras, these gaps genuinely start to close. And this second
+> layer shows where past incidents tend to cluster, so the next new camera
+> can be placed where it will actually make a difference, instead of
+> wherever happens to be convenient."
 
 ---
 
-## 9. What holds it up, and what's coming (4:10 – 4:50)
+## 4. A face on the feed (2:25 – 2:45)
 
-_[Screen: doesn't matter — talk over Overview or Settings]_
+**DO:** Go to the Live Stream page, and click into one camera.
 
-> "None of this means anything if it can't be trusted. Every user only ever
-> does what their role allows — a department viewer can never even glimpse
-> another department's cameras. No password is ever stored in plain text.
-> And because every department's data already stands apart from the others,
-> this grows to all 26-plus departments without a single redesign."
-
-> "So what's next? First — already underway — we're training our vehicle
-> recognition model from 500 vehicles up to 10,000, and pairing it with real
-> license-plate reading, so a dirty or damaged plate is never a dead end.
-> That's the piece that turns tonight's story fully real. Second, two-factor
-> authentication at login. Third, turning all this data into trend reports a
-> department can actually act on — not just a map to look at."
+**SAY:**
+> "Sometimes it's not enough to just know a camera exists — she needs to
+> actually see through it, right now, in this exact moment. With one click,
+> she's watching that junction live, right inside the browser. There's no
+> separate video software to install or open."
 
 ---
 
-## 10. Where the story ends (4:50 – 5:10)
+## 5. Health and the paper trail (2:45 – 3:15)
 
-_[Screen: back to Overview]_
+**DO:** Go to the Health page.
 
-> "That's the night that could have gone differently. One registry for
-> every camera, every department. A map that shows what's covered and
-> what's not. A network that watches its own health so nothing goes dark
-> unnoticed. A record of everything, for everyone who's accountable. And a
-> way to follow a vehicle across a city built on our own real cameras.
-> Thank you."
+**SAY:**
+> "Here's a fact that should worry everyone: studies show that thirty to
+> forty percent of government CCTV cameras are broken or offline at any
+> given moment, and often nobody even notices. Sentinel checks the pulse of
+> every single camera on a regular schedule, and if one keeps going dark
+> again and again, it gets flagged as 'at risk' — so it can get a repair
+> ticket instead of being silently forgotten for years."
+
+**DO:** Go to the Audit Log page.
+
+**SAY:**
+> "And behind everything she does, there's a complete paper trail. Every
+> login, every edit, every deletion that anyone makes in this entire system
+> is recorded automatically — who did it, when, and exactly what they
+> changed. For a police system especially, that record isn't just a nice
+> extra feature. It's the whole point."
 
 ---
 
-## Quick reference — what to type/click, in order
+## 6. Access and identity (3:15 – 3:45)
 
-| Step                       | Action                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| Overview                   | just navigate there                                                                               |
-| Cameras                    | search a name → open Add Camera form → show Edit/Delete → open Bulk Upload                        |
-| Map                        | toggle Coverage Gap → toggle Heatmap                                                              |
-| Live Stream                | click into one camera                                                                             |
-| Health                     | just navigate there                                                                               |
-| Audit Log                  | just navigate there                                                                               |
-| Settings                   | show user list/roles → toggle theme                                                               |
-| Vehicle Search             | plate `GJ01AB1234` + camera "Navrangpura Cross Roads" → let it run                                |
-| Watchlist alerts           | click the bell icon in the top bar (next to "Synced") → show the panel / a toast if one has fired |
-| Security / scale / roadmap | no clicking needed — talk over Overview or Settings                                               |
+**DO:** Go to the Settings page.
 
-**One honest line to keep in both the Vehicle Search and Watchlist beats,
-always:** the plate reading itself is the next model we're integrating —
-everything else shown (camera network, routing, geography) is real and
-running live.
+**SAY:**
+> "Behind the scenes, admins decide exactly what each person is allowed to
+> see — a field officer, a department viewer, an auditor — each role only
+> gets the access it actually needs for its job, nothing extra."
+
+**DO:** Point at (hover near, or click into) the Two-Factor Authentication
+card.
+
+**SAY:**
+> "Remember that six-digit code she typed in earlier, just to log in? This
+> is where that comes from. It's a simple on-and-off switch, sitting right
+> here in her own settings. Any user can turn it on for their own account,
+> scan a QR code with their phone to set it up, and they'll get ten
+> one-time backup codes to keep somewhere safe, in case they ever lose
+> their phone."
+
+**DO:** Toggle between dark and light theme.
+
+**SAY:**
+> "A small detail, but a real one — she can switch between dark and light
+> mode depending on what hour of the day or night she's working."
+
+---
+
+## 7. The vehicle and the wanted list (3:45 – 4:35)
+
+**DO:** Go to the Vehicle Search page.
+
+**SAY:**
+> "Now, back to that vehicle from the incident. She already has its plate
+> number. And the very moment she types that plate number in, before she
+> does anything else at all, Sentinel automatically checks it against the
+> wanted list that every department already keeps and maintains
+> themselves."
+
+**DO:** Type the wanted plate number (for example `GJ01AB1234`) into the
+"Check a plate number" box, and click "Check plate." Let the pop-up alert,
+the sound, and the red warning banner all play out.
+
+**SAY:**
+> "And there it is — an exact match. It instantly shows her the person's
+> name, the plate number, and the reason this vehicle is on the wanted
+> list. This isn't a maybe or a rough guess — it's a direct, exact match,
+> the second it's typed in. And it doesn't just alert her — it's also saved
+> as a notification, so anyone else watching that little bell icon in the
+> top corner sees it too, even if they're sitting at a completely different
+> desk, or working a completely different shift."
+
+**DO:** Now enter the same plate number, plus the camera named "Navrangpura
+Cross Roads," into the photo-based route search, and let it run.
+
+**SAY:**
+> "Beyond just checking the plate, she can also search using a photo. The
+> system reaches out across the real camera network — using real distances
+> and real timestamps — and lays out everywhere this vehicle has actually
+> been seen."
+
+---
+
+## 8. What holds it up, and what's next (4:35 – 5:15)
+
+**DO:** Nothing to click here — you can stay on the Overview or Settings
+page while you talk.
+
+**SAY:**
+> "None of this matters if people can't trust it. Every single user can
+> only ever see what their role allows them to see — a department viewer,
+> for example, can never look at another department's cameras. No
+> password is ever stored anywhere in plain, readable text. Two-factor
+> login, like we saw at the start, is available for anyone who wants the
+> extra layer of safety. And because each department's data is already kept
+> separate from every other department's, this system can grow to cover
+> all twenty-six-plus departments without needing to be rebuilt from
+> scratch."
+>
+> "One honest thing worth saying clearly: right now, that wanted-list check
+> works by matching an exact plate number that's typed in — it does not yet
+> look at a live camera feed and recognize a wanted vehicle just by sight,
+> on its own. That's exactly what's coming next. We're training our
+> vehicle-recognition model further, growing it from five hundred vehicles
+> up to ten thousand, and pairing it with real license-plate reading — so
+> one day, a camera can catch that same match completely on its own,
+> straight from a live video feed, with nobody needing to type anything in
+> at all. After that, the next goal is turning all of this collected data
+> into clear trend reports that a department can actually act on, instead
+> of just a map to look at."
+
+---
+
+## 9. Where the story ends (5:15 – 5:40)
+
+**DO:** Go back to the Overview page.
+
+**SAY:**
+> "So that's the night that could have gone very differently. One single
+> registry for every camera, in every department. A map that clearly shows
+> what's covered and what still isn't. A network that watches its own
+> health, so nothing quietly breaks without anyone noticing. A complete
+> record of everything anyone does, for everyone who needs to be held
+> accountable. A wanted list that speaks up the very instant it's checked.
+> And a way to follow a vehicle across an entire city, built on our own
+> real, working cameras. Thank you."
+
+---
+
+## Quick reference — clicks only, no speech
+
+| Step | What to click/type |
+| --- | --- |
+| Login | email/password → submit → 6-digit code → submit |
+| Overview | just navigate there |
+| Cameras | search → Add Camera → Edit/Delete → Bulk Upload |
+| Map | toggle Coverage Gap → toggle Heatmap |
+| Live Stream | click into one camera |
+| Health / Audit Log | just navigate there |
+| Settings | show roles → point at 2FA card → toggle theme |
+| Vehicle Search | check wanted plate `GJ01AB1234` first (let alert fire, point at bell) → then run photo search with camera "Navrangpura Cross Roads" |
+| Roadmap beat | no clicking — just talk over Overview or Settings |
+
+**Keep this honest line whenever the wanted list comes up:** it's an exact
+plate-number match today, not camera-side recognition yet — everything else
+(camera network, routing, geography, two-factor) is real and running live.

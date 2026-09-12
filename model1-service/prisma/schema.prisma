@@ -39,6 +39,7 @@ model Department {
   users   AppUser[]
   cameras Camera[]
   bulkUploadJobs BulkUploadJob[]
+  wantedVehicles WantedVehicle[]
 
   @@map("department")
 }
@@ -304,6 +305,74 @@ model CameraStatusHistory {
 
   @@index([cameraId, checkedAt(sort: Desc)])
   @@map("camera_status_history")
+}
+
+// ----------------------------------------------------------------------------
+// Wanted List
+// ----------------------------------------------------------------------------
+// A flagged person + vehicle. This table is intentionally populated and
+// managed OUTSIDE this application — departments maintain their own wanted
+// list records in their own systems; this is a read-only mirror used only
+// to check a plate number during Vehicle Search and surface a notification
+// on a match (see docs/superpowers/specs/2026-09-12-wanted-list-design.md).
+// No create/update/delete API exists for this table — rows are seeded/
+// maintained directly at the database level.
+model WantedVehicle {
+  wantedVehicleId String @id @default(dbgenerated("gen_random_uuid()")) @map("wanted_vehicle_id") @db.Uuid
+
+  personName   String @map("person_name")
+  // Normalized (uppercased, whitespace-stripped) on write so exact-match
+  // plate lookups aren't defeated by "GJ01AB1234" vs "gj 01 ab 1234".
+  plateNumber  String @map("plate_number")
+  crimeDetails String @map("crime_details")
+
+  // NOTE: application-level constraint, not a DB CHECK (kept consistent
+  // with this codebase's existing convention for small string enums, e.g.
+  // Camera.cameraType) — 'active' | 'resolved'. Resolved entries are kept
+  // for history but excluded from plate-check matching.
+  status String @default("active")
+
+  departmentId String?   @map("department_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz
+  resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz
+
+  department Department? @relation(fields: [departmentId], references: [departmentId])
+
+  notifications WantedListNotification[]
+
+  @@index([plateNumber], map: "idx_wanted_vehicle_plate_number")
+  @@index([status], map: "idx_wanted_vehicle_status")
+  @@map("wanted_vehicle")
+}
+
+// ----------------------------------------------------------------------------
+// Wanted List Notification
+// ----------------------------------------------------------------------------
+// One row per surfaced match — created when a field officer types a plate
+// number into Vehicle Search and it exactly matches an active wanted_vehicle
+// row (source = manual_search; no ANPR/visual matching exists in this
+// system, so this is the only match path).
+model WantedListNotification {
+  notificationId String @id @default(dbgenerated("gen_random_uuid()")) @map("notification_id") @db.Uuid
+
+  wantedVehicleId String @map("wanted_vehicle_id") @db.Uuid
+
+  // NOTE: application-level constraint — currently always 'manual_search'.
+  // Kept as its own column (rather than assumed) so a future automatic
+  // match path can be added without a schema change.
+  source String
+
+  matchedPlateNumber String @map("matched_plate_number")
+
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  wantedVehicle WantedVehicle @relation(fields: [wantedVehicleId], references: [wantedVehicleId], onDelete: Cascade)
+
+  @@index([isRead, createdAt(sort: Desc)], map: "idx_wanted_notification_unread")
+  @@index([wantedVehicleId], map: "idx_wanted_notification_wanted_vehicle")
+  @@map("wanted_list_notification")
 }
 
 // ----------------------------------------------------------------------------

@@ -243,3 +243,37 @@ export interface HeatmapResult {
   label: string;
   points: HeatmapPoint[];
 }
+
+// ----------------------------------------------------------------------------
+// Wanted List (read-only — departments maintain these records elsewhere;
+// this app only checks a plate number and surfaces a notification)
+// ----------------------------------------------------------------------------
+
+export interface WantedVehicle {
+  wantedVehicleId: string;
+  personName: string;
+  plateNumber: string;
+  crimeDetails: string;
+  status: 'active' | 'resolved';
+  departmentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+export interface CheckPlateResult {
+  matched: boolean;
+  wantedVehicle: WantedVehicle | null;
+}
+
+export interface WantedListNotification {
+  notificationId: string;
+  wantedVehicleId: string;
+  source: 'manual_search';
+  matchedPlateNumber: string;
+  isRead: boolean;
+  createdAt: string;
+  personName: string;
+  plateNumber: string;
+  crimeDetails: string;
+}

@@ -18,6 +18,7 @@ import { HealthMonitoringModule } from './health-monitoring/health-monitoring.mo
 import { GisModule } from './gis/gis.module';
 import { DepartmentsModule } from './departments/departments.module';
 import { AuditModule } from './audit/audit.module';
+import { WantedListModule } from './wanted-list/wanted-list.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
@@ -48,6 +49,7 @@ import { AuditContextModule } from './common/context/audit-context.module';
     GisModule,
     DepartmentsModule,
     AuditModule,
+    WantedListModule,
   ],
   controllers: [AppController],
   providers: [

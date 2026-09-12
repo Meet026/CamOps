@@ -249,12 +249,19 @@ multiple vehicles detected in one photo (prompting a tighter crop) — and
 warns the user if they're looking at a result more than a couple of minutes
 old, since results are never silently refreshed behind their back.
 
-### 5.10 Watchlist Alerts
+### 5.10 Wanted List Alerts
 
-A live alert feed that would continuously check footage from every camera
-against a police wanted list, around the clock, and instantly notify staff
-the moment a flagged vehicle appears — without anyone having to search for
-it manually.
+Departments already maintain their own wanted lists — a flagged person's
+name, their vehicle's plate number, and the reason they're flagged. Sentinel
+checks against that list the instant an officer types a plate number in
+while searching for a vehicle: if it's an exact match, an alert fires
+immediately (a pop-up, a distinct alert sound, and a clearly marked warning
+banner showing the person, the plate, and why they're on the list), and the
+match is also logged as a notification — visible to anyone else watching the
+notification bell in the header, even on a different shift or a different
+desk, not just the person who ran the search. This is a genuine, exact
+plate-number match today, not a camera recognizing a wanted vehicle by sight
+on its own — see the roadmap in Section 11 for that next step.
 
 ### 5.11 How the vehicle-tracing engine actually works
 
@@ -397,6 +404,13 @@ were reported, including the parts that didn't work.
   password specifically signs a user out of every other device or browser
   they were logged into, so an old, possibly-compromised session can't
   quietly keep working after the password changes.
+- **Two-factor authentication is available for any account.** A user can
+  turn it on in their own settings, scanning a QR code with a standard
+  authenticator app; from then on, logging in requires a six-digit code
+  that refreshes every 30 seconds, in addition to the password. Ten
+  one-time backup codes are generated at setup, for the case where a phone
+  is lost or unavailable — each one works exactly once. This is opt-in per
+  account today, not a forced requirement for every user.
 - **A deliberate decision was made not to build a traditional, email-based
   "forgot password" flow.** The team judged that an unauthenticated
   password-reset-by-email path is itself a real account-takeover risk for a
@@ -463,8 +477,11 @@ present something as working, complete, or certain when it isn't:
    matching described in Section 5.11 (currently being scaled up from 500
    to 10,000 training examples, see Section 6) — so that even a dirty,
    damaged, or unreadable plate doesn't stop a vehicle from being traced.
-   This is what turns the vehicle-tracing feature into something fully real
-   end-to-end.
+   This same upgrade is also what would let the wanted-list alert in
+   Section 5.10 run automatically off a live camera feed, catching a match
+   the instant a flagged vehicle is seen — instead of only when an officer
+   manually types a plate in. This is what turns both the vehicle-tracing
+   and wanted-list features into something fully automatic end-to-end.
 2. **Smart motion pre-filtering, before a frame is even sent for analysis.**
    Right now, every frame that comes in from a camera gets fully analyzed,
    whether anything meaningful happened in it or not. The plan is to add a
@@ -479,12 +496,10 @@ present something as working, complete, or certain when it isn't:
    system from wasting processing power analyzing frames that never had a
    vehicle in them in the first place, which is what actually allows the
    platform to keep up as more departments and more cameras join.
-3. **Two-factor authentication** — logging in will require more than just a
-   password, adding an extra one-time code for stronger account security.
-4. **Deeper analytics and trend reporting** — turning all the camera and
+3. **Deeper analytics and trend reporting** — turning all the camera and
    incident data already being collected into actionable trend reports for
    departments, not just a live map to look at.
-5. **A real incident heatmap**, replacing the current beta/sample-data
+4. **A real incident heatmap**, replacing the current beta/sample-data
    version (see Section 10) with actual incident records once that data
    source exists.
 
@@ -492,17 +507,21 @@ present something as working, complete, or certain when it isn't:
 
 ## 12. Honesty note
 
-The vehicle-tracing and watchlist-alert features demonstrate the real
-camera network, real distances, real routing logic, and a real map — all
-genuinely working today. The one piece still being built is the automatic
-license-plate reading itself (item 1 in the roadmap above), and the smart
-motion pre-filtering described in item 2 above is also a planned capability,
-not something already running in production. The incident heatmap on the
-map page is real, working software, but it is currently running on
-placeholder sample data rather than actual incident records, and is clearly
-labeled "Beta" in the product itself — it should not be described as
-equivalent to the coverage-gap analysis next to it, which genuinely is a
-live calculation over real data. Any description of these features should
-make these distinctions clear rather than implying they are already fully
-live — this is a deliberate, stated project value (built with integrity,
-not overstatement), not a weakness to hide.
+The vehicle-tracing feature demonstrates the real camera network, real
+distances, real routing logic, and a real map — all genuinely working
+today. The wanted-list alert (Section 5.10) is also real and working today,
+but only as an exact plate-number match, triggered when an officer types a
+plate in — it does not yet watch a live camera feed and recognize a wanted
+vehicle by sight on its own. That automatic, camera-side version depends on
+the same license-plate-reading and further model training already listed as
+item 1 in the roadmap (Section 11), and is not built yet. The smart motion
+pre-filtering described in item 2 is also a planned capability, not
+something already running in production. The incident heatmap on the map
+page is real, working software, but it is currently running on placeholder
+sample data rather than actual incident records, and is clearly labeled
+"Beta" in the product itself — it should not be described as equivalent to
+the coverage-gap analysis next to it, which genuinely is a live calculation
+over real data. Any description of these features should make these
+distinctions clear rather than implying they are already fully live — this
+is a deliberate, stated project value (built with integrity, not
+overstatement), not a weakness to hide.
