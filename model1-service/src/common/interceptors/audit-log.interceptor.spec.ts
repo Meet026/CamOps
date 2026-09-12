@@ -16,7 +16,13 @@ describe('AuditLogInterceptor', () => {
     // AuditContextService.setChanges(request, ...) in a test and the
     // interceptor's own request.getRequest() call see the SAME object —
     // matching how a real Express request object works within one request.
-    const request = { user, correlationId, body: { email: 'x@y.com' } };
+    const request = {
+      user,
+      correlationId,
+      body: { email: 'x@y.com' },
+      ip: '203.0.113.7',
+      headers: { 'user-agent': 'Mozilla/5.0 test-agent' },
+    };
     return {
       switchToHttp: () => ({
         getRequest: () => request,
@@ -28,6 +34,18 @@ describe('AuditLogInterceptor', () => {
 
   function makeCallHandler(response: unknown) {
     return { handle: () => of(response) } as CallHandler;
+  }
+
+  // Simulates a controller (like AuthController.login) that stamps
+  // request.user itself, mid-handler, on a @Public() route where no guard
+  // ever populates it beforehand.
+  function makeCallHandlerThatStampsUser(request: any, userId: string, response: unknown) {
+    return {
+      handle: () => {
+        request.user = { userId };
+        return of(response);
+      },
+    } as CallHandler;
   }
 
   beforeEach(() => {
@@ -55,8 +73,68 @@ describe('AuditLogInterceptor', () => {
             userId: 'user-1',
             action: 'login',
             entityType: 'app_user',
+            entityId: null,
             metadata: expect.objectContaining({ correlationId: 'corr-1' }),
           }),
+        });
+        done();
+      });
+    });
+  });
+
+  it('includes the request IP address and user-agent in metadata', (done) => {
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue({ action: 'login', entityType: 'app_user' });
+    const context = makeContext({ userId: 'user-1' });
+    const handler = makeCallHandler({ accessToken: 'abc' });
+
+    interceptor.intercept(context, handler).subscribe(() => {
+      setImmediate(() => {
+        expect(prisma.auditLog.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            metadata: expect.objectContaining({
+              ipAddress: '203.0.113.7',
+              userAgent: 'Mozilla/5.0 test-agent',
+            }),
+          }),
+        });
+        done();
+      });
+    });
+  });
+
+  it('reads request.user AFTER the handler runs, so a route that stamps its own actor mid-handler (e.g. login on a @Public() route) is still attributed correctly', (done) => {
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue({ action: 'login', entityType: 'app_user' });
+    const context = makeContext(undefined); // no user before the handler runs, like a real @Public() route
+    const request = context.switchToHttp().getRequest();
+    const handler = makeCallHandlerThatStampsUser(request, 'user-1', { accessToken: 'abc' });
+
+    interceptor.intercept(context, handler).subscribe(() => {
+      setImmediate(() => {
+        expect(prisma.auditLog.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ userId: 'user-1' }),
+        });
+        done();
+      });
+    });
+  });
+
+  it('records entityId when the service method recorded one via setChanges', (done) => {
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue({ action: 'delete_camera', entityType: 'camera' });
+    const context = makeContext({ userId: 'user-1' });
+    const request = context.switchToHttp().getRequest();
+    auditContext.setChanges(request, { isActive: true }, { isActive: false }, 'camera-123');
+    const handler = makeCallHandler(undefined);
+
+    interceptor.intercept(context, handler).subscribe(() => {
+      setImmediate(() => {
+        expect(prisma.auditLog.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ entityId: 'camera-123' }),
         });
         done();
       });

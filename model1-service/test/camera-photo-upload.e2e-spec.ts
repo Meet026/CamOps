@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import bcrypt from 'bcrypt';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { waitForAuditWritesToSettle } from './wait-for-audit-writes';
 import { STORAGE_PROVIDER } from '../src/storage/storage-provider.token';
 import { StorageProvider } from '../src/storage/storage-provider.interface';
 import { AI_PROVIDER } from '../src/scoring/providers/ai-provider.token';
@@ -63,6 +64,11 @@ describe('Camera Photo Upload (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Login's audit write is fire-and-forget (see writeAuditLogEntry) and
+    // now records a real userId — give it a moment to land before cleanup()
+    // deletes the very user it references, or the write trips
+    // audit_log_user_id_fkey (harmless, caught, but noisy in test output).
+    await waitForAuditWritesToSettle();
     await cleanup();
     await app.close();
   });

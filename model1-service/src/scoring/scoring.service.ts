@@ -142,6 +142,7 @@ export class ScoringService {
         request,
         { status: 'pending' },
         { status: 'rejected' },
+        verificationId,
       );
       return { verificationId, status: 'rejected' };
     }
@@ -190,6 +191,7 @@ export class ScoringService {
       request,
       { status: 'pending' },
       { status: 'confirmed', onvifStatus, integrationScore },
+      verificationId,
     );
 
     return { verificationId, status: 'confirmed' };
@@ -298,6 +300,7 @@ export class ScoringService {
         onvifSource: result.onvifSource,
         dataConfidence: result.dataConfidence,
       },
+      cameraId,
     );
   }
 

@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import bcrypt from 'bcrypt';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { waitForAuditWritesToSettle } from './wait-for-audit-writes';
 
 describe('Camera Registry (e2e)', () => {
   let app: INestApplication<App>;
@@ -20,6 +21,21 @@ describe('Camera Registry (e2e)', () => {
   let adminToken: string;
   let deptAViewerToken: string;
   let createdCameraIdInDeptB: string;
+
+  // The audit log write is fire-and-forget (AuditLogInterceptor never awaits
+  // it, by design — see writeAuditLogEntry) so it can still be in flight
+  // against the live DB the instant supertest's response resolves. Poll
+  // briefly rather than reading once immediately after the HTTP call.
+  async function waitForAuditRow(
+    where: Parameters<PrismaService['auditLog']['findFirst']>[0]['where'],
+  ) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const row = await prisma.auditLog.findFirst({ where, orderBy: { createdAt: 'desc' } });
+      if (row) return row;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return null;
+  }
 
   async function cleanup() {
     const users = await prisma.appUser.findMany({
@@ -71,6 +87,11 @@ describe('Camera Registry (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Login's audit write is fire-and-forget (see writeAuditLogEntry) and
+    // now records a real userId — give it a moment to land before cleanup()
+    // deletes the very user it references, or the write trips
+    // audit_log_user_id_fkey (harmless, caught, but noisy in test output).
+    await waitForAuditWritesToSettle();
     await cleanup();
     await app.close();
   });
@@ -114,9 +135,14 @@ describe('Camera Registry (e2e)', () => {
     expect(updateResponse.body.latitude).toBe(24.0);
     expect(updateResponse.body.longitude).toBe(73.0);
 
-    const auditRow = await prisma.auditLog.findFirst({
-      where: { action: 'update_camera', entityType: 'camera' },
-      orderBy: { createdAt: 'desc' },
+    // Scoped by entityId (now populated — see writeAuditLogEntry), not just
+    // action/entityType: without this, a concurrently-running e2e spec's own
+    // update_camera row can be the most recent one and this assertion would
+    // flakily check the wrong camera's audit entry.
+    const auditRow = await waitForAuditRow({
+      action: 'update_camera',
+      entityType: 'camera',
+      entityId: cameraId,
     });
     expect(auditRow).not.toBeNull();
     expect(auditRow!.metadata).toMatchObject({

@@ -53,10 +53,11 @@ describe('CameraRegistryController', () => {
     };
     const createdCamera = { cameraId: 'cam-1', ...dto };
     service.createCamera.mockResolvedValue(createdCamera);
+    const fakeRequest = {} as any;
 
-    const result = await controller.create(dto, currentUser);
+    const result = await controller.create(fakeRequest, dto, currentUser);
 
-    expect(service.createCamera).toHaveBeenCalledWith(dto, 'user-1');
+    expect(service.createCamera).toHaveBeenCalledWith(fakeRequest, dto, 'user-1');
     expect(result).toEqual(createdCamera);
   });
 

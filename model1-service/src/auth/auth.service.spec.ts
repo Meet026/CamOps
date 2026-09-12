@@ -59,6 +59,14 @@ describe('AuthService', () => {
       expect(refreshTokenService.issue).toHaveBeenCalledWith('user-1');
     });
 
+    it('includes the userId of the account that logged in, for audit-log attribution', async () => {
+      usersService.findByEmail.mockResolvedValue(fakeUser);
+
+      const result = await service.login('admin@sentinel.local', 'correct-password');
+
+      expect(result.userId).toBe('user-1');
+    });
+
     it('throws UnauthorizedException for an unknown email', async () => {
       usersService.findByEmail.mockResolvedValue(null);
       await expect(service.login('nobody@sentinel.local', 'anything')).rejects.toThrow(

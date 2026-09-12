@@ -7,6 +7,11 @@ import { RefreshTokenService } from './refresh-token.service';
 export interface LoginResult {
   accessToken: string;
   refreshToken: string;
+  // Not returned to the client as part of the API response shape used by
+  // the frontend — added so AuthController can attribute the audit_log
+  // row to the account that just logged in (see AuditLogInterceptor,
+  // which otherwise has no request.user to read on this @Public() route).
+  userId: string;
 }
 
 export interface RefreshResult {
@@ -50,7 +55,7 @@ export class AuthService {
     const accessToken = this.signAccessToken(user);
     const { token: refreshToken } = await this.refreshTokenService.issue(user.userId);
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, userId: user.userId };
   }
 
   async refresh(rawRefreshToken: string): Promise<RefreshResult> {

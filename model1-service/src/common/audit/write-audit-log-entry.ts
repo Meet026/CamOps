@@ -13,11 +13,12 @@ export function writeAuditLogEntry(
   userId: string | null,
   action: string,
   entityType: string,
+  entityId: string | null,
   metadata: Prisma.InputJsonValue,
 ): void {
   prisma.auditLog
     .create({
-      data: { userId, action, entityType, metadata },
+      data: { userId, action, entityType, entityId, metadata },
     })
     .catch((error: Error) => {
       logger.error(`Failed to write audit log for action "${action}": ${error.message}`);

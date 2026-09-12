@@ -110,6 +110,7 @@ describe('BulkUploadService', () => {
       await (service as any).processRowsInBackground('job-1', Buffer.from('x'), 'user-1');
 
       expect(cameraRegistryService.createCamera).toHaveBeenCalledWith(
+        undefined,
         expect.objectContaining({ name: 'Camera A', departmentId: 'dept-1' }),
         'user-1',
       );
@@ -118,6 +119,7 @@ describe('BulkUploadService', () => {
         'user-1',
         'create_camera',
         'camera',
+        'cam-new',
         expect.objectContaining({ before: null }),
       );
     });
@@ -151,6 +153,7 @@ describe('BulkUploadService', () => {
         'user-1',
         'update_camera',
         'camera',
+        'cam-existing',
         expect.objectContaining({ before: { name: 'Old Name' }, after: { name: 'Existing Camera' } }),
       );
     });

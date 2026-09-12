@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import bcrypt from 'bcrypt';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { waitForAuditWritesToSettle } from './wait-for-audit-writes';
 
 describe('Camera Bulk Upload (e2e)', () => {
   let app: INestApplication<App>;
@@ -65,6 +66,11 @@ describe('Camera Bulk Upload (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Login's audit write is fire-and-forget (see writeAuditLogEntry) and
+    // now records a real userId — give it a moment to land before cleanup()
+    // deletes the very user it references, or the write trips
+    // audit_log_user_id_fkey (harmless, caught, but noisy in test output).
+    await waitForAuditWritesToSettle();
     await cleanup();
     await app.close();
   });

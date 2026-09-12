@@ -45,7 +45,7 @@ export class UsersService {
     });
 
     if (existingUser.role !== newRole) {
-      this.auditContext.setChanges(request, { role: existingUser.role }, { role: newRole });
+      this.auditContext.setChanges(request, { role: existingUser.role }, { role: newRole }, userId);
     }
 
     return updatedUser;

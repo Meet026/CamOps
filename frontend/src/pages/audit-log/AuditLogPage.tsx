@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ClipboardList, Check, Copy, ChevronDown } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
-import { useAuth } from "@/contexts/AuthContext";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -12,11 +11,10 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { SkeletonStack } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 import * as auditApi from "@/api/audit";
-import * as usersApi from "@/api/users";
 import type { AuditLogEntry } from "@/api/audit";
 
 const PAGE_SIZE = 25;
-const GRID_COLUMNS = "200px 250px 250px 190px minmax(150px,1fr) 20px";
+const GRID_COLUMNS = "180px minmax(180px,1.2fr) minmax(120px,0.8fr) 150px minmax(200px,1.4fr) 20px";
 
 // Tone-mapped by action-name convention (create_*/update_*/delete_*/etc.)
 // rather than one literal per action string, so a newly-added @Audit(...)
@@ -87,7 +85,6 @@ function CopyableId({ value }: { value: string }) {
 export function AuditLogPage() {
   usePageTitle("Audit Log");
   const navigate = useNavigate();
-  const { user } = useAuth();
 
   const [page, setPage] = useState(1);
   const [action, setAction] = useState("");
@@ -120,20 +117,6 @@ export function AuditLogPage() {
     queryFn: () => auditApi.listAuditLog(query),
   });
 
-  // GET /users is admin-only server-side, so only resolve actor emails when
-  // the signed-in user is an admin — auditors still see the page (with raw
-  // user ids in the Actor column) rather than a 403 breaking the fetch.
-  const usersQuery = useQuery({
-    queryKey: ["users", "audit-log-actor-lookup"],
-    queryFn: () => usersApi.listUsers({ page: 1, limit: 100 }),
-    enabled: user?.role === "admin",
-    staleTime: 60_000,
-  });
-  const actorEmail = (userId: string | null) => {
-    if (!userId) return "system";
-    return usersQuery.data?.find((u) => u.userId === userId)?.email ?? userId;
-  };
-
   const hasActiveFilters = Boolean(action || entityType || fromDate || toDate);
   const clearFilters = () => {
     setAction("");
@@ -146,14 +129,14 @@ export function AuditLogPage() {
   return (
     <div className="p-6">
       {/* Filter bar — same visual pattern as CameraListPage */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
         <Input
           value={action}
           onChange={(e) => {
             setAction(e.target.value);
             setPage(1);
           }}
-          placeholder="Filter by action…"
+          placeholder="Search action…"
           className="w-48"
         />
         <Input
@@ -162,7 +145,7 @@ export function AuditLogPage() {
             setEntityType(e.target.value);
             setPage(1);
           }}
-          placeholder="Filter by entity type…"
+          placeholder="Search entity type…"
           className="w-48"
         />
         <Input
@@ -209,20 +192,19 @@ export function AuditLogPage() {
           <div className="overflow-hidden rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)]">
             <div className="overflow-x-auto">
               <div
-                className="grid min-w-[1040px] gap-3 border-b border-[var(--border-default)] px-[18px] py-2.5 text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]"
+                className="grid min-w-[1080px] gap-6 border-b border-[var(--border-default)] px-5 py-3 text-[11.5px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]"
                 style={{ gridTemplateColumns: GRID_COLUMNS }}>
                 <div>Timestamp</div>
                 <div>Actor</div>
+                <div>Department</div>
                 <div>Action</div>
                 <div>Entity</div>
-                <div>Correlation id</div>
                 <div />
               </div>
               {rows.map((row) => (
                 <AuditRow
                   key={row.auditId}
                   row={row}
-                  actor={actorEmail(row.userId)}
                   isExpanded={expandedId === row.auditId}
                   onToggle={() =>
                     setExpandedId((id) =>
@@ -265,34 +247,52 @@ export function AuditLogPage() {
 
 function AuditRow({
   row,
-  actor,
   isExpanded,
   onToggle,
   onEntityClick,
 }: {
   row: AuditLogEntry;
-  actor: string;
   isExpanded: boolean;
   onToggle: () => void;
   onEntityClick: () => void;
 }) {
   const hasDiff = Boolean(row.metadata?.before || row.metadata?.after);
-  const isCameraEntity = row.entityType === "camera" && row.entityId;
+  // Correlation id moved out of the listing grid into this expanded detail
+  // area — still available for cross-referencing server logs, just not
+  // taking up a whole column every row needs to scroll past.
+  const hasDetail = Boolean(
+    hasDiff || row.metadata?.ipAddress || row.metadata?.userAgent || row.metadata?.correlationId,
+  );
+  const isCameraEntity = row.entityType === "camera" && Boolean(row.entityId);
 
   return (
     <div className="border-b border-[var(--border-default)] last:border-b-0">
       <div
         onClick={onToggle}
-        className="grid min-w-[1040px] cursor-pointer items-center gap-3 px-[18px] py-[11px] font-mono text-[12.5px] hover:bg-[var(--bg-surface-raised)]"
+        className="grid min-w-[1080px] cursor-pointer items-center gap-6 px-5 py-4 font-mono text-[12.5px] hover:bg-[var(--bg-surface-raised)]"
         style={{ gridTemplateColumns: GRID_COLUMNS }}>
         <div className="text-[var(--text-secondary)]">
           {format(new Date(row.createdAt), "yyyy-MM-dd HH:mm:ss")}
         </div>
-        <div className="truncate font-sans">{actor}</div>
+        <div className="min-w-0 font-sans">
+          {row.actor ? (
+            <div className="flex flex-col gap-0.5 leading-tight">
+              <span className="truncate">{row.actor.email}</span>
+              <span className="truncate text-[11px] text-[var(--text-secondary)]">
+                {row.actor.role}
+              </span>
+            </div>
+          ) : (
+            <span className="text-[var(--text-secondary)]">system</span>
+          )}
+        </div>
+        <div className="truncate font-sans text-[var(--text-secondary)]">
+          {row.actor?.departmentName ?? "—"}
+        </div>
         <div>
           <ActionTag action={row.action} />
         </div>
-        <div className="truncate font-sans">
+        <div className="min-w-0 truncate font-sans">
           {isCameraEntity ? (
             <button
               onClick={(e) => {
@@ -300,24 +300,16 @@ function AuditRow({
                 onEntityClick();
               }}
               className="font-mono text-[12.5px] text-[var(--color-brand)] hover:underline">
-              {row.entityType}:{row.entityId!.slice(0, 8)}
+              {row.entityLabel ?? row.entityType}
             </button>
           ) : (
             <span className="text-[var(--text-secondary)]">
-              {row.entityType}
-              {row.entityId ? `:${row.entityId.slice(0, 8)}` : ""}
+              {row.entityLabel ?? row.entityType}
             </span>
           )}
         </div>
-        <div className="min-w-0 text-[var(--text-secondary)]">
-          {row.metadata?.correlationId ? (
-            <CopyableId value={row.metadata.correlationId} />
-          ) : (
-            "—"
-          )}
-        </div>
         <div className="font-sans text-[var(--text-secondary)]">
-          {hasDiff && (
+          {hasDetail && (
             <ChevronDown
               className={cn(
                 "h-4 w-4 transition-transform duration-150",
@@ -327,9 +319,28 @@ function AuditRow({
           )}
         </div>
       </div>
-      {isExpanded && hasDiff && (
-        <div className="bg-[var(--bg-surface-sunken)] px-[18px] pb-[18px] pt-3.5">
-          <DiffView before={row.metadata?.before} after={row.metadata?.after} />
+      {isExpanded && hasDetail && (
+        <div className="flex flex-col gap-3 bg-[var(--bg-surface-sunken)] px-[18px] pb-[18px] pt-3.5">
+          {hasDiff ? (
+            <DiffView before={row.metadata?.before} after={row.metadata?.after} />
+          ) : (
+            <p className="text-xs text-[var(--text-secondary)]">
+              No field-level changes recorded.
+            </p>
+          )}
+          {(row.metadata?.correlationId || row.metadata?.ipAddress || row.metadata?.userAgent) && (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 font-mono text-[11.5px] text-[var(--text-secondary)]">
+              {row.metadata?.correlationId && (
+                <span className="flex items-center gap-1">
+                  Correlation id: <CopyableId value={row.metadata.correlationId} />
+                </span>
+              )}
+              {row.metadata?.ipAddress && <span>IP: {row.metadata.ipAddress}</span>}
+              {row.metadata?.userAgent && (
+                <span className="truncate">User agent: {row.metadata.userAgent}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -340,7 +351,7 @@ function DiffView({
   before,
   after,
 }: {
-  before?: Record<string, unknown>;
+  before?: Record<string, unknown> | null;
   after?: Record<string, unknown>;
 }) {
   const fields = Array.from(
@@ -374,7 +385,7 @@ function DiffView({
             {field}
           </div>
           <div className="bg-[var(--bg-surface)] px-3 py-[9px] font-mono text-[var(--color-status-offline)]">
-            {formatDiffValue(before?.[field])}
+            {before === null ? "(new)" : formatDiffValue(before?.[field])}
           </div>
           <div className="bg-[var(--bg-surface)] px-3 py-[9px] font-mono text-[var(--color-status-online)]">
             {formatDiffValue(after?.[field])}

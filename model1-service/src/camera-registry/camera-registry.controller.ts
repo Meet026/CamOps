@@ -40,8 +40,12 @@ export class CameraRegistryController {
   @Audit('create_camera', 'camera')
   @HttpCode(HttpStatus.CREATED)
   @Post()
-  async create(@Body() dto: CreateCameraDto, @CurrentUser() currentUser: AuthenticatedUser) {
-    return this.cameraRegistryService.createCamera(dto, currentUser.userId);
+  async create(
+    @Req() request: Request,
+    @Body() dto: CreateCameraDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.cameraRegistryService.createCamera(request, dto, currentUser.userId);
   }
 
   @Roles('admin', 'field_officer', 'dept_viewer', 'auditor')

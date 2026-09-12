@@ -64,13 +64,14 @@ describe('CameraRegistryService', () => {
       longitude: 72.5714,
       cameraType: 'ip' as const,
     };
+    const fakeRequest = {} as Request;
 
     it('runs an INSERT then a SELECT, and returns the mapped camelCase record', async () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ camera_id: 'cam-1' }])
         .mockResolvedValueOnce([fakeCreatedRow]);
 
-      const result = await service.createCamera(dto, 'user-1');
+      const result = await service.createCamera(fakeRequest, dto, 'user-1');
 
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
       expect(result).toEqual({
@@ -116,15 +117,32 @@ describe('CameraRegistryService', () => {
       );
       prisma.$queryRaw.mockRejectedValueOnce(fkError);
 
-      await expect(service.createCamera(dto, 'user-1')).rejects.toThrow(BadRequestException);
+      await expect(service.createCamera(fakeRequest, dto, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
-    it('does not call auditContext.setChanges on create (only update/delete record before/after)', async () => {
+    it('records a before:null/after:{fields} change with the new camera as entityId', async () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ camera_id: 'cam-1' }])
         .mockResolvedValueOnce([fakeCreatedRow]);
 
-      await service.createCamera(dto, 'user-1');
+      await service.createCamera(fakeRequest, dto, 'user-1');
+
+      expect(auditContext.setChanges).toHaveBeenCalledWith(
+        fakeRequest,
+        null,
+        expect.objectContaining({ name: 'Main Gate Camera', departmentId: 'dept-1' }),
+        'cam-1',
+      );
+    });
+
+    it('does not call setChanges when called with no request (e.g. the bulk-upload background job)', async () => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ camera_id: 'cam-1' }])
+        .mockResolvedValueOnce([fakeCreatedRow]);
+
+      await service.createCamera(undefined, dto, 'user-1');
 
       expect(auditContext.setChanges).not.toHaveBeenCalled();
     });
@@ -302,6 +320,7 @@ describe('CameraRegistryService', () => {
         fakeRequest,
         { name: 'Old Name' },
         { name: 'New Name' },
+        'cam-1',
       );
     });
 
@@ -325,6 +344,7 @@ describe('CameraRegistryService', () => {
         fakeRequest,
         { latitude: 23.0225, longitude: 72.5714 },
         { latitude: 24.0, longitude: 73.0 },
+        'cam-1',
       );
     });
 
@@ -461,6 +481,7 @@ describe('CameraRegistryService', () => {
         fakeRequest,
         { photoUrl: null },
         { photoUrl: 'https://res.cloudinary.com/test/cam-1.jpg' },
+        'cam-1',
       );
       expect(result.cameraId).toBe('cam-1');
     });
@@ -505,6 +526,7 @@ describe('CameraRegistryService', () => {
         fakeRequest,
         { isActive: true },
         { isActive: false },
+        'cam-1',
       );
     });
 

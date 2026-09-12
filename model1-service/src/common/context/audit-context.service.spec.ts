@@ -23,6 +23,37 @@ describe('AuditContextService', () => {
     });
   });
 
+  it('includes entityId in the changes when passed as the fourth argument', () => {
+    service.setChanges(
+      request as Request,
+      { integrationScore: 'easy' },
+      { integrationScore: 'medium' },
+      'camera-123',
+    );
+
+    expect(service.getChanges(request as Request)).toEqual({
+      before: { integrationScore: 'easy' },
+      after: { integrationScore: 'medium' },
+      entityId: 'camera-123',
+    });
+  });
+
+  it('omits entityId from the changes when not passed', () => {
+    service.setChanges(request as Request, { role: 'field_officer' }, { role: 'admin' });
+
+    expect(service.getChanges(request as Request)?.entityId).toBeUndefined();
+  });
+
+  it('accepts null as before, for a create action where nothing existed beforehand', () => {
+    service.setChanges(request as Request, null, { name: 'New Camera' }, 'cam-1');
+
+    expect(service.getChanges(request as Request)).toEqual({
+      before: null,
+      after: { name: 'New Camera' },
+      entityId: 'cam-1',
+    });
+  });
+
   it('keeps changes isolated per request object — two different requests never see each other\'s data', () => {
     const requestA: Partial<Request> = {};
     const requestB: Partial<Request> = {};

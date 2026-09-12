@@ -114,7 +114,15 @@ export class CameraRegistryService {
     @Inject(STORAGE_PROVIDER) private readonly storageProvider: StorageProvider,
   ) {}
 
-  async createCamera(dto: CreateCameraDto, createdBy: string): Promise<CameraRecord> {
+  // `request` is optional: the bulk-upload background job calls this method
+  // with no live HTTP request (it writes its own audit_log row directly via
+  // writeAuditLogEntry instead — see BulkUploadService), so there is nothing
+  // for AuditContextService to attach changes to in that case.
+  async createCamera(
+    request: Request | undefined,
+    dto: CreateCameraDto,
+    createdBy: string,
+  ): Promise<CameraRecord> {
     let insertedId: string;
     try {
       const rows = await this.prisma.$queryRaw<{ camera_id: string }[]>`
@@ -143,6 +151,29 @@ export class CameraRegistryService {
     if (!created) {
       throw new Error(`Camera ${insertedId} was inserted but could not be re-read`);
     }
+
+    // Only the fields an admin actually filled in on the create form — not
+    // the whole CameraRecord (which includes Date-typed fields AuditFieldValues
+    // can't represent, and derived/default fields like currentStatus that
+    // aren't meaningful as a "change" on a brand-new row).
+    if (request) {
+      this.auditContext.setChanges(
+        request,
+        null,
+        {
+          name: created.name,
+          departmentId: created.departmentId,
+          cameraType: created.cameraType,
+          brand: created.brand,
+          model: created.model,
+          addressText: created.addressText,
+          latitude: created.latitude,
+          longitude: created.longitude,
+        },
+        created.cameraId,
+      );
+    }
+
     return created;
   }
 
@@ -298,7 +329,7 @@ export class CameraRegistryService {
     const changes = await this.applyCameraFieldChanges(cameraId, dto, existing);
 
     if (changes) {
-      this.auditContext.setChanges(request, changes.before, changes.after);
+      this.auditContext.setChanges(request, changes.before, changes.after, cameraId);
     }
 
     const updated = await this.findCameraRow(cameraId);
@@ -414,7 +445,7 @@ export class CameraRegistryService {
       data: { isActive: false },
     });
 
-    this.auditContext.setChanges(request, { isActive: true }, { isActive: false });
+    this.auditContext.setChanges(request, { isActive: true }, { isActive: false }, cameraId);
   }
 
   async updateCameraPhoto(
@@ -443,7 +474,7 @@ export class CameraRegistryService {
       UPDATE camera SET photo_url = ${photoUrl}, updated_at = now() WHERE camera_id = ${cameraId}::uuid
     `;
 
-    this.auditContext.setChanges(request, { photoUrl: existing.photoUrl }, { photoUrl });
+    this.auditContext.setChanges(request, { photoUrl: existing.photoUrl }, { photoUrl }, cameraId);
 
     const updated = await this.findCameraRow(cameraId);
     if (!updated) {

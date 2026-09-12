@@ -8,8 +8,11 @@ import { Request } from 'express';
 export type AuditFieldValues = Record<string, string | number | boolean | null>;
 
 export interface AuditChanges {
-  before: AuditFieldValues;
+  // null is valid for `before` specifically — a create action has nothing
+  // that existed beforehand (see CameraRegistryService.createCamera).
+  before: AuditFieldValues | null;
   after: AuditFieldValues;
+  entityId?: string;
 }
 
 declare module 'express' {
@@ -34,8 +37,13 @@ declare module 'express' {
  */
 @Injectable()
 export class AuditContextService {
-  setChanges(request: Request, before: AuditFieldValues, after: AuditFieldValues): void {
-    request.auditChanges = { before, after };
+  setChanges(
+    request: Request,
+    before: AuditFieldValues | null,
+    after: AuditFieldValues,
+    entityId?: string,
+  ): void {
+    request.auditChanges = entityId ? { before, after, entityId } : { before, after };
   }
 
   getChanges(request: Request): AuditChanges | undefined {

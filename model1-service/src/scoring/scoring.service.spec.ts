@@ -93,6 +93,7 @@ describe('ScoringService', () => {
         fakeRequest,
         expect.any(Object),
         expect.objectContaining({ onvifStatus: 'yes', integrationScore: 'easy' }),
+        'cam-1',
       );
     });
 
@@ -243,6 +244,12 @@ describe('ScoringService', () => {
       });
       expect(prisma.$executeRaw).toHaveBeenCalled(); // camera write
       expect(result.status).toBe('confirmed');
+      expect(auditContext.setChanges).toHaveBeenCalledWith(
+        fakeRequest,
+        { status: 'pending' },
+        expect.objectContaining({ status: 'confirmed' }),
+        'ver-1',
+      );
     });
 
     it('on reject: updates the verification row only, no camera write, no vendor_lookup row', async () => {
@@ -264,6 +271,12 @@ describe('ScoringService', () => {
       expect(prisma.vendorLookup.create).not.toHaveBeenCalled();
       expect(prisma.$executeRaw.mock.calls.length).toBe(executeRawCallsBefore);
       expect(result.status).toBe('rejected');
+      expect(auditContext.setChanges).toHaveBeenCalledWith(
+        fakeRequest,
+        { status: 'pending' },
+        { status: 'rejected' },
+        'ver-2',
+      );
     });
   });
 

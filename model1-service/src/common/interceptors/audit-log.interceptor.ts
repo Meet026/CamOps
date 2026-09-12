@@ -27,15 +27,23 @@ export class AuditLogInterceptor implements NestInterceptor {
 
     const request = context.switchToHttp().getRequest();
     const correlationId: string | undefined = request.correlationId;
-    const userId: string | null = request.user?.userId ?? null;
+    const ipAddress: string | undefined = request.ip;
+    const userAgent: string | undefined = request.headers?.['user-agent'];
 
     return next.handle().pipe(
       tap(() => {
+        // request.user is read here, AFTER the handler has run — not
+        // upfront — because a @Public() route (login) has no user on the
+        // request until its own controller stamps one on success. Reading
+        // it before next.handle() would always see the pre-login value
+        // (undefined), permanently misattributing every login row.
+        const userId: string | null = request.user?.userId ?? null;
         // If the service method that just ran called
-        // AuditContextService.setChanges(before, after), include those
-        // values in the audit row. Routes that never call it (e.g. login,
-        // which doesn't edit an existing field) get metadata with just a
-        // correlationId, same as before this feature existed.
+        // AuditContextService.setChanges(before, after, entityId?), include
+        // those values in the audit row. Routes that never call it (e.g.
+        // login, which doesn't edit an existing field) get metadata with
+        // just a correlationId/ipAddress/userAgent, same as before this
+        // feature existed.
         const changes = this.auditContext.getChanges(request);
         // Prisma's Json field type (InputJsonValue) can't statically verify
         // an arbitrary Record<string, unknown> is JSON-safe — the cast is
@@ -43,10 +51,24 @@ export class AuditLogInterceptor implements NestInterceptor {
         // field-value objects (e.g. { role: 'admin' }), never functions,
         // classes, or circular references.
         const metadata: Prisma.InputJsonValue = changes
-          ? { correlationId, before: changes.before, after: changes.after }
-          : { correlationId };
+          ? {
+              correlationId,
+              ipAddress,
+              userAgent,
+              before: changes.before,
+              after: changes.after,
+            }
+          : { correlationId, ipAddress, userAgent };
+        const entityId = changes?.entityId ?? null;
 
-        writeAuditLogEntry(this.prisma, userId, auditMeta.action, auditMeta.entityType, metadata);
+        writeAuditLogEntry(
+          this.prisma,
+          userId,
+          auditMeta.action,
+          auditMeta.entityType,
+          entityId,
+          metadata,
+        );
       }),
     );
   }

@@ -7,10 +7,12 @@ import { AuthService } from './auth.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
+import { AuditContextModule } from '../common/context/audit-context.module';
 
 @Module({
   imports: [
     UsersModule,
+    AuditContextModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

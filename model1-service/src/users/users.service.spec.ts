@@ -80,6 +80,7 @@ describe('UsersService', () => {
         fakeRequest,
         { role: 'field_officer' },
         { role: 'admin' },
+        'user-1',
       );
     });
 

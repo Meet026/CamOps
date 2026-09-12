@@ -207,9 +207,9 @@ export class BulkUploadService {
         installedAt: dto.installedAt,
       };
 
-      const created = await this.cameraRegistryService.createCamera(createDto, createdBy);
+      const created = await this.cameraRegistryService.createCamera(undefined, createDto, createdBy);
 
-      writeAuditLogEntry(this.prisma, createdBy, 'create_camera', 'camera', {
+      writeAuditLogEntry(this.prisma, createdBy, 'create_camera', 'camera', created.cameraId, {
         before: null,
         after: { cameraId: created.cameraId, name: created.name },
       });
@@ -249,7 +249,7 @@ export class BulkUploadService {
     );
 
     if (changes) {
-      writeAuditLogEntry(this.prisma, createdBy, 'update_camera', 'camera', {
+      writeAuditLogEntry(this.prisma, createdBy, 'update_camera', 'camera', existing.cameraId, {
         before: changes.before,
         after: changes.after,
       });
