@@ -1,0 +1,17 @@
+# Virtual environment
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Environment
+.env
+
+# Models (downloaded separately)
+models/*.onnx
+models/*.bin
+models/*.safetensors
+
+# IDE
+.vscode/
+.idea/

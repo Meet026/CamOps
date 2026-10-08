@@ -24,12 +24,33 @@ AI Registry/video-stream/README.md for the sourcing):
   completeness check. temp_file fixes this at the source — a segment
   only appears under its real name once ffmpeg has fully written it, so
   a request can never observe a partial file.
+
+Windows note: asyncio.create_subprocess_exec requires ProactorEventLoop
+on Windows, but uvicorn's --reload mode forces SelectorEventLoop
+regardless of policy settings. To avoid this entirely, ffmpeg is
+launched via subprocess.Popen (standard library, loop-agnostic) and
+process lifecycle is managed synchronously. This is safe here because
+Popen.terminate()/kill()/poll() are all non-blocking calls.
 """
 import asyncio
 import os
 import shutil
+import subprocess
+import sys
 import time
 import urllib.parse
+
+# Resolve ffmpeg at import time. shutil.which searches the current PATH;
+# if the process inherited a stale PATH (e.g. winget installed ffmpeg
+# after the terminal was opened), fall back to the known install location.
+_FFMPEG_FALLBACK = (
+    r"C:\Users\Aakanksha\AppData\Local\Microsoft\WinGet\Packages"
+    r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
+    r"\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe"
+)
+FFMPEG_BIN = shutil.which("ffmpeg") or (
+    _FFMPEG_FALLBACK if sys.platform == "win32" and os.path.exists(_FFMPEG_FALLBACK) else "ffmpeg"
+)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "hls")
 
@@ -109,6 +130,7 @@ def _with_rtsp_credentials(rtsp_url: str) -> str:
         netloc += f":{parsed.port}"
     return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
 
+
 # How long a camera's process stays running with nobody requesting its
 # playlist/segments before the idle sweep kills it. HLS players poll the
 # playlist every ~segment-duration seconds by nature of the protocol, so
@@ -153,7 +175,9 @@ class StreamManager:
     def __init__(self, data_dir: str = DATA_DIR):
         self._data_dir = data_dir
         os.makedirs(self._data_dir, exist_ok=True)
-        self._processes: dict[str, asyncio.subprocess.Process] = {}
+        # subprocess.Popen objects — loop-agnostic, works on Windows
+        # with any asyncio event loop policy.
+        self._processes: dict[str, subprocess.Popen] = {}
         self._last_access: dict[str, float] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._sweep_task: asyncio.Task | None = None
@@ -170,7 +194,8 @@ class StreamManager:
 
     def is_running(self, camera_id: str) -> bool:
         proc = self._processes.get(camera_id)
-        return proc is not None and proc.returncode is None
+        # poll() returns None if the process is still running
+        return proc is not None and proc.poll() is None
 
     async def ensure_started(self, camera_id: str, rtsp_url: str) -> None:
         """
@@ -178,6 +203,12 @@ class StreamManager:
         Idempotent — safe to call on every request. Uses a per-camera
         lock so two concurrent first-requests for the same camera don't
         race and spawn two ffmpeg processes for it.
+
+        Uses subprocess.Popen instead of asyncio.create_subprocess_exec
+        to avoid the Windows asyncio SelectorEventLoop limitation —
+        Popen is synchronous and loop-agnostic, and the spawned ffmpeg
+        process runs independently in the background writing HLS files
+        to disk, so there is nothing to await after it starts.
         """
         self.touch(camera_id)
         if self.is_running(camera_id):
@@ -203,7 +234,7 @@ class StreamManager:
             authenticated_url = _with_rtsp_credentials(rtsp_url)
 
             cmd = [
-                "ffmpeg",
+                FFMPEG_BIN,
                 "-rtsp_transport", "tcp",
                 "-i", authenticated_url,
                 "-c:v", "copy",
@@ -216,10 +247,10 @@ class StreamManager:
                 playlist,
             ]
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             except FileNotFoundError:
                 raise StreamManagerError(
@@ -231,13 +262,17 @@ class StreamManager:
         """Kills the ffmpeg process (if running) and deletes its output
         directory. Safe to call even if the camera was never started."""
         process = self._processes.pop(camera_id, None)
-        if process is not None and process.returncode is None:
+        if process is not None and process.poll() is None:
             process.terminate()
             try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
+                # Wait up to 5 s for graceful exit, then force-kill.
+                # Run in executor so we don't block the event loop.
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: process.wait(timeout=5)
+                )
+            except subprocess.TimeoutExpired:
                 process.kill()
-                await process.wait()
+                process.wait()
 
         self._last_access.pop(camera_id, None)
         self._locks.pop(camera_id, None)

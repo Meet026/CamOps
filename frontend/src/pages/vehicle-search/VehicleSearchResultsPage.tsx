@@ -471,7 +471,12 @@ function RouteLayer({ route }: { route: VehicleRouteEntry[] }) {
     })
 
     if (positions.length > 0) {
-      map.fitBounds(L.latLngBounds(positions).pad(0.25), { animate: false })
+      const bounds = L.latLngBounds(positions)
+      if (bounds.getNorthEast().equals(bounds.getSouthWest())) {
+        map.setView(positions[0], 14, { animate: false })
+      } else {
+        map.fitBounds(bounds.pad(0.25), { animate: false })
+      }
     }
 
     return () => {

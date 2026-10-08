@@ -190,12 +190,18 @@ async def vehicles_route(photo: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not read uploaded file: {e}")
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+    # Windows holds an exclusive lock on NamedTemporaryFile while it is
+    # open, so any second open() of the same path (by the detector or
+    # PIL) gets Errno 13 Permission denied. Fix: write with delete=False,
+    # close the file handle, use the path, then delete manually.
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp_path = tmp.name
+    try:
         tmp.write(contents)
-        tmp.flush()
+        tmp.close()  # release the Windows lock before passing path to others
 
         try:
-            detections = _detector.detect(tmp.name)
+            detections = _detector.detect(tmp_path)
         except DetectorError as e:
             raise HTTPException(
                 status_code=422, detail=f"Detection failed: {e.reason} - {e}"
@@ -204,7 +210,7 @@ async def vehicles_route(photo: UploadFile = File(...)):
         used_whole_image_fallback = False
         if not detections:
             try:
-                whole_image = Image.open(tmp.name).convert("RGB")
+                whole_image = Image.open(tmp_path).convert("RGB")
             except (UnidentifiedImageError, OSError) as e:
                 raise HTTPException(
                     status_code=400, detail=f"Could not read uploaded file as an image: {e}"
@@ -224,70 +230,75 @@ async def vehicles_route(photo: UploadFile = File(...)):
                 )
             ]
             used_whole_image_fallback = True
-
-        store = SightingStore()
+    finally:
         try:
-            results = []
-            for detection in detections:
-                try:
-                    model_input = to_model_input(
-                        detection.crop, _embedder.input_height, _embedder.input_width
-                    )
-                    embedding = _embedder.embed(model_input)
-                except EmbedderError as e:
-                    results.append(
-                        {
-                            "vehicle_class": detection.class_name,
-                            "detection_confidence": detection.confidence,
-                            "used_whole_image_fallback": used_whole_image_fallback,
-                            "error": f"EMBEDDING_FAILED:{e.reason}",
-                        }
-                    )
-                    continue
+            os.unlink(tmp_path)
+        except OSError:
+            pass  # best-effort cleanup
 
-                try:
-                    # Only compare against sightings of the SAME vehicle
-                    # class — a car match against a stored truck is a
-                    # guaranteed false positive (51 such cross-class
-                    # matches were measured clearing the old threshold).
-                    # The whole-image fallback path has class "unknown",
-                    # which matches nothing stored, so it passes None and
-                    # keeps its previous unrestricted behaviour.
-                    route = store.find_route(
-                        embedding,
-                        similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
-                        vehicle_class=(
-                            detection.class_name
-                            if detection.class_name != "unknown"
-                            else None
-                        ),
-                    )
-                except SightingStoreError as e:
-                    results.append(
-                        {
-                            "vehicle_class": detection.class_name,
-                            "detection_confidence": detection.confidence,
-                            "used_whole_image_fallback": used_whole_image_fallback,
-                            "error": f"ROUTE_QUERY_FAILED:{e.reason}",
-                        }
-                    )
-                    continue
-
-                for entry in route:
-                    entry["sighting_id"] = str(entry["sighting_id"])
-                    entry["camera_id"] = str(entry["camera_id"])
-                    entry["detected_at"] = entry["detected_at"].isoformat()
-
+    store = SightingStore()
+    try:
+        results = []
+        for detection in detections:
+            try:
+                model_input = to_model_input(
+                    detection.crop, _embedder.input_height, _embedder.input_width
+                )
+                embedding = _embedder.embed(model_input)
+            except EmbedderError as e:
                 results.append(
                     {
                         "vehicle_class": detection.class_name,
                         "detection_confidence": detection.confidence,
                         "used_whole_image_fallback": used_whole_image_fallback,
-                        "route": route,
-                        "route_threshold_used": ROUTE_SIMILARITY_THRESHOLD,
+                        "error": f"EMBEDDING_FAILED:{e.reason}",
                     }
                 )
-        finally:
-            store.close()
+                continue
+
+            try:
+                # Only compare against sightings of the SAME vehicle
+                # class — a car match against a stored truck is a
+                # guaranteed false positive (51 such cross-class
+                # matches were measured clearing the old threshold).
+                # The whole-image fallback path has class "unknown",
+                # which matches nothing stored, so it passes None and
+                # keeps its previous unrestricted behaviour.
+                route = store.find_route(
+                    embedding,
+                    similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
+                    vehicle_class=(
+                        detection.class_name
+                        if detection.class_name != "unknown"
+                        else None
+                    ),
+                )
+            except SightingStoreError as e:
+                results.append(
+                    {
+                        "vehicle_class": detection.class_name,
+                        "detection_confidence": detection.confidence,
+                        "used_whole_image_fallback": used_whole_image_fallback,
+                        "error": f"ROUTE_QUERY_FAILED:{e.reason}",
+                    }
+                )
+                continue
+
+            for entry in route:
+                entry["sighting_id"] = str(entry["sighting_id"])
+                entry["camera_id"] = str(entry["camera_id"])
+                entry["detected_at"] = entry["detected_at"].isoformat()
+
+            results.append(
+                {
+                    "vehicle_class": detection.class_name,
+                    "detection_confidence": detection.confidence,
+                    "used_whole_image_fallback": used_whole_image_fallback,
+                    "route": route,
+                    "route_threshold_used": ROUTE_SIMILARITY_THRESHOLD,
+                }
+            )
+    finally:
+        store.close()
 
     return JSONResponse({"detections": results})

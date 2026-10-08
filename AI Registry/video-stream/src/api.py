@@ -14,11 +14,19 @@ for the wider context this fits into.
 Run locally:
     uvicorn src.api:app --reload --port 8100
 """
+import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+
+# Windows requires ProactorEventLoop to support asyncio subprocesses
+# (create_subprocess_exec). The default SelectorEventLoop on Windows
+# does not implement subprocess transport, raising NotImplementedError.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
