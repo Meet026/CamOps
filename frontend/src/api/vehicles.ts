@@ -62,9 +62,26 @@ export interface NaturalLanguageSearchResponse {
   execution_time_ms: number
 }
 
-export async function searchVehicleRoute(photo: File): Promise<VehicleRouteResponse> {
+// Both optional, and only meaningful together — the backend rejects one
+// without the other (400). lastSeenAt must be a timezone-aware ISO 8601
+// string; Date#toISOString() already produces one (always UTC, with a
+// 'Z' offset), so passing that through directly satisfies the backend's
+// requirement without any extra formatting here.
+export interface VehicleRouteSearchAnchor {
+  lastSeenCameraId: string
+  lastSeenAt: string
+}
+
+export async function searchVehicleRoute(
+  photo: File,
+  anchor?: VehicleRouteSearchAnchor,
+): Promise<VehicleRouteResponse> {
   const formData = new FormData()
   formData.append('photo', photo)
+  if (anchor) {
+    formData.append('last_seen_camera_id', anchor.lastSeenCameraId)
+    formData.append('last_seen_at', anchor.lastSeenAt)
+  }
   const response = await vehicleApiClient.post<VehicleRouteResponse>('/vehicles/route', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })

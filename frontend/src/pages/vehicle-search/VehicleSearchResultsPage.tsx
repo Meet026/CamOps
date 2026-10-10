@@ -239,6 +239,14 @@ function ResultsHeader({
               ? 'used whole photo (no vehicle boundary found)'
               : `detection ${detection.detection_confidence?.toFixed(2)}`}
           </span>
+          {detection.anchored_search && (
+            <span
+              title="Narrowed to cameras reachable from the last-seen location/time you provided"
+              className="rounded-full bg-[var(--color-status-ai-bg)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-status-ai)]"
+            >
+              Narrowed by location
+            </span>
+          )}
         </div>
         <p className="mt-px text-[12.5px] text-[var(--text-secondary)]">
           Showing sightings ≥ {thresholdPct}% similar · possible matches, not confirmed identifications

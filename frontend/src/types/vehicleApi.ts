@@ -26,6 +26,12 @@ export interface VehicleDetectionResult {
   used_whole_image_fallback: boolean
   route?: VehicleRouteEntry[]
   route_threshold_used?: number
+  // True when last_seen_camera_id/last_seen_at were both provided on the
+  // request and the backend actually ran the spatially-constrained
+  // search (sighting_store.find_route_from_anchor) instead of the
+  // unconstrained global one -- lets the UI say plainly which kind of
+  // search actually produced this result.
+  anchored_search?: boolean
   error?: string
 }
 

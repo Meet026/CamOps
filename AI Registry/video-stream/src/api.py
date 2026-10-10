@@ -101,9 +101,20 @@ def list_cameras():
 
 
 async def _ensure_stream_running(camera_id: str) -> None:
-    lookup = _get_camera_lookup()
+    # _get_camera_lookup() (CameraLookup.__init__ -> psycopg2.connect) and
+    # get_stream_path() are both blocking, synchronous network calls --
+    # calling them directly here, with no await, would block this whole
+    # process's single event loop for as long as each one takes.
+    # Confirmed directly: once vehicle-ingest's motion-check loop started
+    # requesting ~20 cameras' streams concurrently every few seconds
+    # (vs. the occasional single manual viewer this endpoint saw before),
+    # the entire service -- including unrelated requests like GET /health
+    # -- became unresponsive for over 20 seconds. asyncio.to_thread moves
+    # this blocking work off the event loop, the same fix already applied
+    # to vehicle-ingest's own loops for the identical reason.
+    lookup = await asyncio.to_thread(_get_camera_lookup)
     try:
-        stream_path = lookup.get_stream_path(camera_id)
+        stream_path = await asyncio.to_thread(lookup.get_stream_path, camera_id)
     except CameraLookupError as e:
         raise HTTPException(status_code=502, detail=f"Camera lookup failed: {e.reason}")
     finally:

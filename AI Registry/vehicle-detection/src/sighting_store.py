@@ -24,6 +24,39 @@ import psycopg2
 # ones, and never masks a real match by being too strict.
 MAX_PLAUSIBLE_SPEED_KMH = 150.0
 
+# Used by find_route_from_anchor to size the search radius per candidate,
+# NOT a validated cutoff -- a deliberately generous rounding of real,
+# documented mean Indian city traffic speed (~23-24 km/h across multiple
+# independent studies; peak-hour speeds in major cities drop to 10-20
+# km/h, single digits in Mumbai rush hour). Rounding up rather than down
+# is intentional: this constant sizes how far we're willing to SEARCH for
+# a real match, so erring generous risks a slightly wider candidate pool,
+# while erring strict risks silently missing a real match that happened
+# to travel a bit faster than assumed.
+TYPICAL_URBAN_SPEED_KMH = 30.0
+
+# Caps the per-candidate radius for long elapsed gaps. Without a cap, a
+# vehicle not re-sighted for several hours would get a search radius wide
+# enough to cover an entire city, which defeats the purpose of this
+# feature (distinguishing "genuinely nearby" from "anywhere, eventually").
+MAX_SEARCH_RADIUS_KM = 25.0
+
+
+def _anchored_search_radius_km(elapsed_hours: float) -> float:
+    """
+    How far (in km) a vehicle could plausibly have traveled from the
+    anchor sighting in `elapsed_hours`, at TYPICAL_URBAN_SPEED_KMH,
+    capped at MAX_SEARCH_RADIUS_KM. A negative elapsed_hours means the
+    candidate's timestamp is BEFORE the anchor's -- not a forward-in-time
+    hop this function is meant to size a radius for, so it's rejected as
+    a caller error rather than silently producing a negative/zero radius.
+    """
+    if elapsed_hours < 0:
+        raise ValueError(
+            f"elapsed_hours must be >= 0 (candidate is before the anchor): {elapsed_hours}"
+        )
+    return min(TYPICAL_URBAN_SPEED_KMH * elapsed_hours, MAX_SEARCH_RADIUS_KM)
+
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance between two lat/lng points, in kilometers."""
@@ -335,6 +368,121 @@ class SightingStore:
             return filter_plausible_route(rows)
         except Exception as e:
             raise SightingStoreError("QUERY_FAILED", f"Route query failed: {e}")
+        finally:
+            cur.close()
+
+    def find_route_from_anchor(
+        self,
+        embedding: np.ndarray,
+        anchor_camera_id: str,
+        anchor_time,
+        similarity_threshold: float,
+        limit: int = 100,
+        vehicle_class: str | None = None,
+    ) -> list:
+        """
+        Like find_route, but spatially constrained: an officer supplies
+        where and when they last actually saw this vehicle (anchor_camera_id,
+        anchor_time), and each candidate sighting is only considered if it
+        falls within a search radius sized by how much time has elapsed
+        between the anchor and that specific candidate — a tight radius for
+        a candidate minutes later, a wider one (capped at
+        MAX_SEARCH_RADIUS_KM) for one hours later. See
+        _anchored_search_radius_km's docstring for the real-world basis for
+        TYPICAL_URBAN_SPEED_KMH.
+
+        This directly fixes a real ambiguity problem with find_route's
+        global, unconstrained search: a visually similar but unrelated
+        vehicle at a distant, unrelated camera can clear the similarity
+        threshold by coincidence and get presented as a route stop with no
+        way to tell it apart from a genuine match. Constraining the search
+        to physically reachable cameras removes those candidates from
+        consideration entirely, rather than filtering them out after the
+        fact.
+
+        anchor_time must be a timezone-aware datetime — candidates are
+        compared against it both forward and backward in time (a vehicle
+        may have been sighted again either before or after the anchor
+        relative to when this search is run), but a candidate's distance
+        is judged by elapsed time from the anchor specifically, same
+        semantics as find_route's own chronological framing.
+
+        Raises SightingStoreError("ANCHOR_CAMERA_NOT_FOUND", ...) if
+        anchor_camera_id does not exist — a typo'd or stale camera ID is a
+        real, distinct failure mode from "no anchor given", and must
+        surface as an error rather than silently behaving like an
+        unconstrained search.
+        """
+        cur = self._conn.cursor()
+        try:
+            cur.execute(
+                "SELECT 1 FROM camera WHERE camera_id = %s",
+                (anchor_camera_id,),
+            )
+            if cur.fetchone() is None:
+                raise SightingStoreError(
+                    "ANCHOR_CAMERA_NOT_FOUND",
+                    f"anchor_camera_id {anchor_camera_id!r} does not exist",
+                )
+
+            embedding_list = embedding.tolist()
+            class_clause = "AND vs.vehicle_class = %s" if vehicle_class else ""
+
+            cur.execute(
+                f"""
+                SELECT
+                    vs.vehicle_sighting_id,
+                    vs.camera_id,
+                    c.name AS camera_name,
+                    ST_Y(c.location_geo::geometry) AS latitude,
+                    ST_X(c.location_geo::geometry) AS longitude,
+                    vs.detected_at,
+                    vs.vehicle_class,
+                    1 - (vs.embedding <=> %s::vector) AS similarity
+                FROM vehicle_sighting vs
+                JOIN camera c ON c.camera_id = vs.camera_id
+                WHERE ST_DWithin(
+                        c.location_geo,
+                        (SELECT location_geo FROM camera WHERE camera_id = %s),
+                        LEAST(
+                            {TYPICAL_URBAN_SPEED_KMH}
+                                * GREATEST(
+                                    ABS(EXTRACT(EPOCH FROM (vs.detected_at - %s::timestamptz)) / 3600.0),
+                                    0.01
+                                ),
+                            {MAX_SEARCH_RADIUS_KM}
+                        ) * 1000
+                      )
+                  AND 1 - (vs.embedding <=> %s::vector) >= %s
+                  {class_clause}
+                ORDER BY vs.detected_at ASC
+                LIMIT %s;
+                """,
+                # Param order must match the %s placeholders above, in
+                # the order they appear: similarity SELECT, ST_DWithin's
+                # anchor-camera lookup, the elapsed-time expression, the
+                # similarity WHERE clause, the optional class filter, and
+                # finally the row limit.
+                [
+                    embedding_list,       # SELECT ... similarity
+                    anchor_camera_id,     # ST_DWithin anchor camera lookup
+                    anchor_time,          # EXTRACT(EPOCH ...) elapsed time
+                    embedding_list,       # WHERE ... similarity
+                    similarity_threshold,
+                    *([vehicle_class] if vehicle_class else []),
+                    limit,
+                ],
+            )
+            columns = [
+                "sighting_id", "camera_id", "camera_name", "latitude", "longitude",
+                "detected_at", "vehicle_class", "similarity",
+            ]
+            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            return filter_plausible_route(rows)
+        except SightingStoreError:
+            raise
+        except Exception as e:
+            raise SightingStoreError("QUERY_FAILED", f"Anchored route query failed: {e}")
         finally:
             cur.close()
 

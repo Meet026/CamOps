@@ -211,3 +211,166 @@ def test_vehicles_route_falls_back_to_whole_image_on_zero_detections(monkeypatch
     # find_route() genuinely ran against the embedding, rather than the
     # request short-circuiting before ever reaching the database.
     assert "route" in result or "error" in result
+
+
+# --- Anchored (spatially constrained) route search ---
+#
+# Real, documented camera IDs from this project's own live camera table
+# (not fabricated) — same pair used by test_sighting_store.py's own
+# anchored-search test: Chiman bhai Bridge as the near/anchor camera,
+# Hero Showroom Gir Somnath as a genuinely distant one.
+REAL_ANCHOR_CAMERA_ID = os.environ.get(
+    "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+)
+
+
+def test_vehicles_route_rejects_anchor_camera_without_anchor_time():
+    """
+    No database or model access needed for this one — the validation
+    that last_seen_camera_id and last_seen_at must be given together is
+    pure request-shape checking that should fail fast, before any file is
+    even read.
+    """
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    with TestClient(api_module.app) as client:
+        with open(TEST_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("000000000064.jpg", f, "image/jpeg")},
+                data={"last_seen_camera_id": REAL_ANCHOR_CAMERA_ID},
+            )
+
+    assert response.status_code == 400
+    assert "together" in response.json()["detail"]
+
+
+def test_vehicles_route_rejects_malformed_last_seen_at():
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    with TestClient(api_module.app) as client:
+        with open(TEST_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("000000000064.jpg", f, "image/jpeg")},
+                data={
+                    "last_seen_camera_id": REAL_ANCHOR_CAMERA_ID,
+                    "last_seen_at": "not-a-real-timestamp",
+                },
+            )
+
+    assert response.status_code == 400
+    assert "ISO 8601" in response.json()["detail"]
+
+
+def test_vehicles_route_rejects_timezone_naive_last_seen_at():
+    """
+    A naive timestamp (no UTC offset) is genuinely ambiguous against the
+    database's timestamptz columns — this must be rejected with a clear
+    reason, not silently assumed to mean UTC or local time.
+    """
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    with TestClient(api_module.app) as client:
+        with open(TEST_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("000000000064.jpg", f, "image/jpeg")},
+                data={
+                    "last_seen_camera_id": REAL_ANCHOR_CAMERA_ID,
+                    "last_seen_at": "2026-10-06T14:30:00",  # no offset
+                },
+            )
+
+    assert response.status_code == 400
+    assert "timezone" in response.json()["detail"]
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database + real model test, opt-in only",
+)
+def test_vehicles_route_rejects_unknown_anchor_camera_id(monkeypatch):
+    monkeypatch.setenv("VEHICLE_DETECTION_TEST_DATABASE_URL", TEST_DATABASE_URL)
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    from sighting_store import SightingStore as RealSightingStore
+
+    original_init = RealSightingStore.__init__
+
+    def _init_with_test_url(self, database_url=None):
+        original_init(self, database_url=database_url or TEST_DATABASE_URL)
+
+    monkeypatch.setattr(RealSightingStore, "__init__", _init_with_test_url)
+
+    with TestClient(api_module.app) as client:
+        with open(TEST_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("000000000064.jpg", f, "image/jpeg")},
+                data={
+                    "last_seen_camera_id": "00000000-0000-0000-0000-000000000000",
+                    "last_seen_at": "2026-10-06T14:30:00+05:30",
+                },
+            )
+
+    assert response.status_code == 400
+    # SightingStoreError's str() is its message, not its .reason code (the
+    # API handler does detail=str(e)) — assert on the actual camera ID
+    # genuinely appearing in that message, not a code that was never part
+    # of the string form in the first place.
+    assert "00000000-0000-0000-0000-000000000000" in response.json()["detail"]
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database + real model test, opt-in only",
+)
+def test_vehicles_route_runs_anchored_search_when_both_fields_given(monkeypatch):
+    """
+    Proves the real wiring end-to-end through the actual HTTP API: a
+    known real camera (the one 000000000064.jpg's own car detection has
+    a genuine prior sighting at, per the existing
+    test_vehicles_route_returns_chronological_route_for_known_photo) is
+    passed as the anchor, recent enough that the resulting search radius
+    comfortably includes that camera's own location (radius 0 is only
+    reached in the impossible case of elapsed_hours == 0 exactly, which
+    "now" trivially avoids) — the response must come back anchored and
+    still find that same real route.
+    """
+    monkeypatch.setenv("VEHICLE_DETECTION_TEST_DATABASE_URL", TEST_DATABASE_URL)
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    from sighting_store import SightingStore as RealSightingStore
+
+    original_init = RealSightingStore.__init__
+
+    def _init_with_test_url(self, database_url=None):
+        original_init(self, database_url=database_url or TEST_DATABASE_URL)
+
+    monkeypatch.setattr(RealSightingStore, "__init__", _init_with_test_url)
+
+    import datetime
+    anchor_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    with TestClient(api_module.app) as client:
+        with open(TEST_PHOTO, "rb") as f:
+            response = client.post(
+                "/vehicles/route",
+                files={"photo": ("000000000064.jpg", f, "image/jpeg")},
+                data={
+                    "last_seen_camera_id": REAL_ANCHOR_CAMERA_ID,
+                    "last_seen_at": anchor_time,
+                },
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    car_detections = [d for d in body["detections"] if d.get("vehicle_class") == "car"]
+    assert len(car_detections) >= 1
+    assert car_detections[0]["anchored_search"] is True

@@ -17,7 +17,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sighting_store import (
     SightingStore, Sighting, SightingStoreError, _load_database_url,
-    filter_plausible_route, _haversine_km,
+    filter_plausible_route, _haversine_km, _anchored_search_radius_km,
+    TYPICAL_URBAN_SPEED_KMH, MAX_SEARCH_RADIUS_KM,
 )
 
 
@@ -266,3 +267,129 @@ def test_filter_respects_custom_max_speed():
     ]
     assert len(filter_plausible_route(route, max_speed_kmh=150.0)) == 2
     assert len(filter_plausible_route(route, max_speed_kmh=80.0)) == 1
+
+
+# --- _anchored_search_radius_km: pure logic, no database needed, no gate ---
+
+
+def test_anchored_radius_grows_with_elapsed_time():
+    # 5 minutes at the typical urban speed assumption -> a tight radius;
+    # 30 minutes -> a proportionally wider one. Real basis for
+    # TYPICAL_URBAN_SPEED_KMH: documented mean Indian city traffic speed
+    # is ~23-24 km/h (multiple independent studies); 30 km/h is a
+    # deliberately generous rounding so a genuine match isn't excluded by
+    # assuming traffic is slower than it typically is.
+    radius_5min = _anchored_search_radius_km(elapsed_hours=5 / 60)
+    radius_30min = _anchored_search_radius_km(elapsed_hours=30 / 60)
+    assert radius_5min == pytest.approx(TYPICAL_URBAN_SPEED_KMH * (5 / 60))
+    assert radius_30min == pytest.approx(TYPICAL_URBAN_SPEED_KMH * (30 / 60))
+    assert radius_30min > radius_5min
+
+
+def test_anchored_radius_is_capped_for_long_gaps():
+    # A 6-hour gap would imply a 180km radius at 30 km/h -- uncapped, that
+    # would barely constrain the search at all, defeating the point of
+    # this feature. MAX_SEARCH_RADIUS_KM caps it to a realistic
+    # city-crossing distance instead.
+    radius = _anchored_search_radius_km(elapsed_hours=6.0)
+    assert radius == MAX_SEARCH_RADIUS_KM
+
+
+def test_anchored_radius_rejects_negative_elapsed_time():
+    # A candidate sighting timestamped BEFORE the anchor is not a
+    # forward-in-time hop at all -- negative elapsed time is a caller
+    # bug (or a candidate that should never have been compared this way),
+    # not something to silently turn into a negative/zero radius.
+    with pytest.raises(ValueError):
+        _anchored_search_radius_km(elapsed_hours=-1.0)
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_find_route_from_anchor_excludes_candidates_outside_the_radius():
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+    real_camera_id = os.environ.get(
+        "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+    )
+
+    # A second, real camera genuinely far away (CN Vidhyalaya <-> Suvidha
+    # Park is ~108.8km apart, confirmed earlier in this file's own
+    # haversine test) is needed to prove the radius actually excludes a
+    # distant match. Fall back to skipping the far-camera assertions if
+    # that specific camera isn't present in whatever DB this test runs
+    # against, rather than silently passing on fabricated IDs.
+    far_camera_id = os.environ.get("VEHICLE_DETECTION_TEST_FAR_CAMERA_ID")
+
+    embedding = _make_fake_embedding()
+    close_embedding = embedding.copy()
+    close_embedding[0] += 0.0001
+    close_embedding = close_embedding / np.linalg.norm(close_embedding)
+
+    anchor_time = datetime.datetime.now(datetime.timezone.utc)
+    anchor_sighting = Sighting(
+        camera_id=real_camera_id, source_image_path="/tmp/anchor_test.jpg",
+        box_xyxy=(0, 0, 10, 10), vehicle_class="car",
+        detection_confidence=0.9, embedding=embedding,
+    )
+    nearby_sighting = Sighting(
+        camera_id=real_camera_id, source_image_path="/tmp/anchor_test_nearby.jpg",
+        box_xyxy=(0, 0, 10, 10), vehicle_class="car",
+        detection_confidence=0.9, embedding=close_embedding,
+    )
+
+    anchor_id = store.save(anchor_sighting)
+    nearby_id = store.save(nearby_sighting)
+    far_id = None
+
+    try:
+        if far_camera_id:
+            far_sighting = Sighting(
+                camera_id=far_camera_id, source_image_path="/tmp/anchor_test_far.jpg",
+                box_xyxy=(0, 0, 10, 10), vehicle_class="car",
+                detection_confidence=0.9, embedding=close_embedding,
+            )
+            far_id = store.save(far_sighting)
+
+        route = store.find_route_from_anchor(
+            embedding=embedding,
+            anchor_camera_id=real_camera_id,
+            anchor_time=anchor_time,
+            similarity_threshold=0.99,
+        )
+        route_ids = {str(r["sighting_id"]) for r in route}
+
+        assert str(nearby_id) in route_ids
+        if far_id:
+            assert str(far_id) not in route_ids
+    finally:
+        ids_to_clean = [anchor_id, nearby_id]
+        if far_id:
+            ids_to_clean.append(far_id)
+        cur = store._conn.cursor()
+        cur.execute(
+            "DELETE FROM vehicle_sighting WHERE vehicle_sighting_id = ANY(%s::uuid[])",
+            (ids_to_clean,),
+        )
+        cur.close()
+        store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_find_route_from_anchor_raises_typed_error_for_unknown_camera():
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+
+    with pytest.raises(SightingStoreError) as exc_info:
+        store.find_route_from_anchor(
+            embedding=_make_fake_embedding(),
+            anchor_camera_id="00000000-0000-0000-0000-000000000000",
+            anchor_time=datetime.datetime.now(datetime.timezone.utc),
+            similarity_threshold=0.8,
+        )
+    assert exc_info.value.reason == "ANCHOR_CAMERA_NOT_FOUND"
+
+    store.close()

@@ -23,12 +23,13 @@ Run locally:
     uvicorn src.api:app --reload --port 8000
 Then see interactive docs at http://localhost:8000/docs
 """
+import datetime
 import os
 import sys
 import tempfile
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
@@ -156,7 +157,11 @@ def health():
 
 
 @app.post("/vehicles/route")
-async def vehicles_route(photo: UploadFile = File(...)):
+async def vehicles_route(
+    photo: UploadFile = File(...),
+    last_seen_camera_id: str | None = Form(default=None),
+    last_seen_at: str | None = Form(default=None),
+):
     """
     Accepts one photo. If it's a normal scene, YOLO detects every vehicle
     in it and each one is treated separately, as before. If YOLO finds
@@ -180,9 +185,46 @@ async def vehicles_route(photo: UploadFile = File(...)):
     with truly no vehicle in it still correctly returns no results (the
     embedding + similarity search naturally won't find real matches for
     an embedding of, say, an empty street or a person).
+
+    last_seen_camera_id / last_seen_at (both optional, both required
+    together): when an officer knows roughly where and when they last
+    actually saw this vehicle, passing both anchors the search to
+    SightingStore.find_route_from_anchor instead of the unconstrained
+    find_route — candidates are only considered if they fall within a
+    search radius sized by elapsed time from that anchor, which removes
+    the real ambiguity problem of a visually similar but unrelated
+    vehicle at a distant, unrelated camera clearing the similarity
+    threshold by coincidence. Omitting both keeps today's existing,
+    unconstrained global search exactly as it was — this is a strictly
+    additive capability, not a replacement.
     """
     if _detector is None or _embedder is None:
         raise HTTPException(status_code=503, detail="Models not yet loaded")
+
+    if (last_seen_camera_id is None) != (last_seen_at is None):
+        raise HTTPException(
+            status_code=400,
+            detail="last_seen_camera_id and last_seen_at must be provided together, or both omitted",
+        )
+
+    anchor_time = None
+    if last_seen_at is not None:
+        try:
+            anchor_time = datetime.datetime.fromisoformat(last_seen_at)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"last_seen_at is not a valid ISO 8601 timestamp: {last_seen_at!r}",
+            )
+        if anchor_time.tzinfo is None:
+            # A naive timestamp is ambiguous against the database's
+            # timestamptz columns — reject it rather than silently
+            # assuming a timezone that may not match what the officer
+            # actually meant.
+            raise HTTPException(
+                status_code=400,
+                detail="last_seen_at must include a timezone offset (e.g. 2026-10-06T14:30:00+05:30)",
+            )
 
     suffix = os.path.splitext(photo.filename or "")[1] or ".jpg"
     try:
@@ -256,24 +298,41 @@ async def vehicles_route(photo: UploadFile = File(...)):
                 )
                 continue
 
+            # Only compare against sightings of the SAME vehicle
+            # class — a car match against a stored truck is a
+            # guaranteed false positive (51 such cross-class
+            # matches were measured clearing the old threshold).
+            # The whole-image fallback path has class "unknown",
+            # which matches nothing stored, so it passes None and
+            # keeps its previous unrestricted behaviour.
+            class_filter = (
+                detection.class_name if detection.class_name != "unknown" else None
+            )
+
             try:
-                # Only compare against sightings of the SAME vehicle
-                # class — a car match against a stored truck is a
-                # guaranteed false positive (51 such cross-class
-                # matches were measured clearing the old threshold).
-                # The whole-image fallback path has class "unknown",
-                # which matches nothing stored, so it passes None and
-                # keeps its previous unrestricted behaviour.
-                route = store.find_route(
-                    embedding,
-                    similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
-                    vehicle_class=(
-                        detection.class_name
-                        if detection.class_name != "unknown"
-                        else None
-                    ),
-                )
+                if anchor_time is not None:
+                    route = store.find_route_from_anchor(
+                        embedding,
+                        anchor_camera_id=last_seen_camera_id,
+                        anchor_time=anchor_time,
+                        similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
+                        vehicle_class=class_filter,
+                    )
+                else:
+                    route = store.find_route(
+                        embedding,
+                        similarity_threshold=ROUTE_SIMILARITY_THRESHOLD,
+                        vehicle_class=class_filter,
+                    )
             except SightingStoreError as e:
+                if e.reason == "ANCHOR_CAMERA_NOT_FOUND":
+                    # A bad request (typo'd/stale camera ID), not a
+                    # server-side query failure — surface it as a
+                    # 400 for this whole request rather than folding
+                    # it into a per-detection "error" entry, since
+                    # every detection in this photo shares the same
+                    # (invalid) anchor and would fail identically.
+                    raise HTTPException(status_code=400, detail=str(e))
                 results.append(
                     {
                         "vehicle_class": detection.class_name,
@@ -296,6 +355,7 @@ async def vehicles_route(photo: UploadFile = File(...)):
                     "used_whole_image_fallback": used_whole_image_fallback,
                     "route": route,
                     "route_threshold_used": ROUTE_SIMILARITY_THRESHOLD,
+                    "anchored_search": anchor_time is not None,
                 }
             )
     finally:

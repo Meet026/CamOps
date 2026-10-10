@@ -164,6 +164,49 @@ SWEEP_INTERVAL_SECONDS = float(os.environ.get("VIDEO_STREAM_SWEEP_INTERVAL", "15
 HLS_SEGMENT_SECONDS = "2"
 HLS_LIST_SIZE = "4"
 
+# How long to wait for ffprobe to report the source codec before giving
+# up and falling through to stream-copy. Per the gateway's own
+# Integrator's Guide (sentinel.gujarat.gov.in/resource), cameras mix
+# H.264 and HEVC/H.265 -- confirmed directly with ffprobe against real
+# cameras on this gateway (cam06/cam12/cam17 are HEVC, cam07/cam09/cam24
+# are H.264). Most Chromium browsers have no HEVC decoder wired into
+# MSE, so an HEVC source passed through with `-c:v copy` fails in the
+# browser with a genuine, unrecoverable decode error -- not a transient
+# issue, and not fixable by retrying. A probe failure (timeout, gateway
+# hiccup) falls through to the existing copy path rather than blocking
+# stream start entirely -- the same tradeoff this file already makes for
+# the idle-timeout default: guessing H.264 and being wrong costs a
+# decode error a viewer can still report, while blocking every stream
+# start on a probe is a worse failure mode for the common (H.264) case.
+CODEC_PROBE_TIMEOUT_SECONDS = 10.0
+
+
+def _probe_video_codec(rtsp_url: str) -> str | None:
+    """
+    Runs ffprobe against the source and returns its video codec name
+    (e.g. "h264", "hevc"), or None if the probe fails or times out.
+    """
+    try:
+        result = subprocess.run(
+            [
+                FFMPEG_BIN.replace("ffmpeg", "ffprobe"),
+                "-v", "error",
+                "-rtsp_transport", "tcp",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                rtsp_url,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=CODEC_PROBE_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+    codec = result.stdout.strip()
+    return codec or None
+
 
 class StreamManagerError(Exception):
     def __init__(self, reason: str, message: str = ""):
@@ -233,11 +276,24 @@ class StreamManager:
             # argv below, ever holds it.
             authenticated_url = _with_rtsp_credentials(rtsp_url)
 
+            source_codec = _probe_video_codec(authenticated_url)
+            if source_codec == "hevc":
+                # Browser decoders can't play this source untouched —
+                # re-encode to H.264 so every camera is playable
+                # regardless of what the upstream gateway sends.
+                # veryfast/crf 23 favors keeping up with a live source
+                # over compression efficiency, matching how this service
+                # already prioritizes low latency (2s HLS segments)
+                # elsewhere in this same command.
+                video_codec_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+            else:
+                video_codec_args = ["-c:v", "copy"]
+
             cmd = [
                 FFMPEG_BIN,
                 "-rtsp_transport", "tcp",
                 "-i", authenticated_url,
-                "-c:v", "copy",
+                *video_codec_args,
                 "-an",
                 "-f", "hls",
                 "-hls_time", HLS_SEGMENT_SECONDS,

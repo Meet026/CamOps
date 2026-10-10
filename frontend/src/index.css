@@ -61,6 +61,12 @@
   --color-brand-border: rgba(91, 95, 239, 0.42);
   --shadow-float: 0 4px 24px rgba(0, 0, 0, 0.36);
   --bg-glass: rgba(17, 19, 24, 0.82);
+  /* Tells the browser this page is dark-themed, so native form controls
+     (date/time pickers, scrollbars, the <select> popup) render with a
+     dark UI and light icons/text instead of defaulting to a light
+     control on a dark page — exactly the bug that made the
+     datetime-local calendar icon nearly invisible before this. */
+  color-scheme: dark;
 }
 
 [data-theme="light"] {
@@ -77,6 +83,7 @@
   --color-brand-border: rgba(67, 56, 202, 0.3);
   --shadow-float: 0 4px 20px rgba(15, 17, 21, 0.09);
   --bg-glass: rgba(255, 255, 255, 0.86);
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: light) {
@@ -94,6 +101,7 @@
     --color-brand-border: rgba(67, 56, 202, 0.3);
     --shadow-float: 0 4px 20px rgba(15, 17, 21, 0.09);
     --bg-glass: rgba(255, 255, 255, 0.86);
+    color-scheme: light;
   }
 }
 
@@ -121,6 +129,26 @@ body {
 /* Tabular figures for monospace data columns (PRD 2.2) */
 .font-mono {
   font-variant-numeric: tabular-nums;
+}
+
+/* The datetime-local/date/time calendar+clock icon in Chromium browsers:
+   color-scheme alone isn't reliable here — on some Chrome/OS
+   combinations the icon still renders as a dark glyph that's nearly
+   invisible against this theme's dark fields (confirmed: invert(1)
+   alone was not enough, presumably because color-scheme's own icon
+   recoloring and the invert filter fought each other instead of
+   compounding). Forcing an explicit background + full opacity on the
+   icon itself is the reliable fix — it no longer depends on guessing
+   what color the browser already drew it. */
+input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  background-color: var(--text-secondary);
+  opacity: 1;
+}
+input::-webkit-calendar-picker-indicator:hover {
+  background-color: var(--text-primary);
 }
 
 @keyframes shake {

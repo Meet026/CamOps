@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ImagePlus, Loader2, ShieldAlert, Sparkles, Search } from 'lucide-react'
+import { ImagePlus, Loader2, MapPin, ShieldAlert, Sparkles, Search } from 'lucide-react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useVehicleRouteSearch } from '@/hooks/useVehicleSearch'
+import { useCameraList } from '@/hooks/useCameras'
 import { getVehicleApiErrorMessage, getVehicleApiErrorStatus } from '@/api/vehicleClient'
 import { getApiErrorMessage } from '@/api/client'
 import * as wantedListApi from '@/api/wantedList'
@@ -13,6 +14,19 @@ import { CropOverlay, DEFAULT_CROP_RECT, cropImageToFile, type CropRect } from '
 import type { VehicleRouteResponse } from '@/types/vehicleApi'
 import type { CheckPlateResult } from '@/types/api'
 
+// Converts a <input type="datetime-local"> value (local time, no
+// timezone, e.g. "2026-10-06T14:30") into a real, timezone-aware ISO
+// string the backend's last_seen_at actually accepts — the backend
+// explicitly rejects a naive timestamp (no offset) as ambiguous, so this
+// must never just pass the raw input value through.
+function toIsoWithOffset(datetimeLocalValue: string): string {
+  return new Date(datetimeLocalValue).toISOString()
+}
+
+// Pixel-matched to the reference (Sentinel.dc.html) Vehicle Search screen:
+// dashed drop zone -> crop step (draggable frame, corner handles,
+// rule-of-thirds grid) -> search, with the design's exact copy, the
+// "Skip cropping" text link, and its 422/503 error banner treatment.
 type Step = 'idle' | 'crop' | 'searching'
 
 export function VehicleSearchPage() {
@@ -33,6 +47,18 @@ export function VehicleSearchPage() {
   const [nlQuery, setNlQuery] = useState('')
   const [isNlSearching, setIsNlSearching] = useState(false)
   const [nlError, setNlError] = useState<string | null>(null)
+
+  // Optional "last seen at" anchor — narrows the search to cameras
+  // physically reachable from here within the elapsed time, instead of
+  // searching the whole camera network. Both empty means an unconstrained
+  // search, identical to today's existing behavior.
+  const [lastSeenCameraId, setLastSeenCameraId] = useState('')
+  const [lastSeenAtLocal, setLastSeenAtLocal] = useState('')
+  // Backend caps page size at 100 (PaginationDto's @Max(100)) — this
+  // dropdown only needs "a reasonable list to pick from," not the full
+  // registry, so a single capped page is the right fit here rather than
+  // paginating through the whole camera list just to populate a select.
+  const { data: cameras } = useCameraList({ limit: 100 })
 
   usePageTitle('Vehicle Search')
 
@@ -120,7 +146,19 @@ export function VehicleSearchPage() {
   const runSearch = async (photoToSend: File) => {
     setStep('searching')
     try {
-      const result: VehicleRouteResponse = await searchMutation.mutateAsync(photoToSend)
+      // Both fields must be given together or not at all — a camera
+      // chosen with no time, or a time with no camera, is treated as "no
+      // anchor" rather than silently sent partially (the backend would
+      // reject that combination anyway; this just avoids a round trip
+      // that's guaranteed to 400).
+      const anchor =
+        lastSeenCameraId && lastSeenAtLocal
+          ? { lastSeenCameraId, lastSeenAt: toIsoWithOffset(lastSeenAtLocal) }
+          : undefined
+      const result: VehicleRouteResponse = await searchMutation.mutateAsync({
+        photo: photoToSend,
+        anchor,
+      })
       // searchedAt stamps when this response was actually produced. The
       // results page renders purely from router state and never
       // re-fetches, so reloading or revisiting that URL replays an old
@@ -288,6 +326,44 @@ export function VehicleSearchPage() {
           {plateResult && !plateResult.matched && (
             <p className="mt-3 text-sm text-[var(--color-status-online)]">
               No match — this plate is not on the wanted list.
+            </p>
+          )}
+        </div>
+
+        <div className="mb-6 rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-surface)] p-4">
+          <div className="flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-[var(--text-secondary)]" />
+            <p className="text-[13.5px] font-semibold">Last seen at (optional)</p>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            If you know roughly where and when this vehicle was last seen, the search narrows to
+            cameras it could realistically have reached by now — fewer, more trustworthy results
+            instead of matches from anywhere in the network.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <select
+              value={lastSeenCameraId}
+              onChange={(e) => setLastSeenCameraId(e.target.value)}
+              className="h-10 min-w-[200px] flex-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-canvas)] px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+            >
+              <option value="">Camera…</option>
+              {cameras?.map((camera) => (
+                <option key={camera.cameraId} value={camera.cameraId}>
+                  {camera.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="datetime-local"
+              value={lastSeenAtLocal}
+              onChange={(e) => setLastSeenAtLocal(e.target.value)}
+              className="h-10 flex-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-canvas)] px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
+            />
+          </div>
+          {(lastSeenCameraId || lastSeenAtLocal) && (!lastSeenCameraId || !lastSeenAtLocal) && (
+            <p className="mt-2 text-xs text-[var(--color-status-unknown)]">
+              Pick both a camera and a time to narrow the search — leave both blank to search
+              everywhere instead.
             </p>
           )}
         </div>
