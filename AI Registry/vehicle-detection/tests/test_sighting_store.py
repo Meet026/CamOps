@@ -10,6 +10,7 @@ database access, opt-in when actually verifying against a real instance.
 import datetime
 import os
 import sys
+import uuid
 
 import numpy as np
 import pytest
@@ -18,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sighting_store import (
     SightingStore, Sighting, SightingStoreError, _load_database_url,
     filter_plausible_route, _haversine_km, _anchored_search_radius_km,
-    TYPICAL_URBAN_SPEED_KMH, MAX_SEARCH_RADIUS_KM,
+    TYPICAL_URBAN_SPEED_KMH, MAX_SEARCH_RADIUS_KM, merge_routes,
 )
 
 
@@ -28,6 +29,21 @@ TEST_DATABASE_URL = os.environ.get("VEHICLE_DETECTION_TEST_DATABASE_URL")
 def _make_fake_embedding():
     vec = np.random.rand(512).astype(np.float32)
     return vec / np.linalg.norm(vec)
+
+
+def _delete_sightings(store, sighting_ids):
+    # Real-DB tests write to a shared database; each test removes exactly
+    # the rows it created so repeated runs stay isolated.
+    if not sighting_ids:
+        return
+    cur = store._conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM vehicle_sighting WHERE vehicle_sighting_id = ANY(%s::uuid[])",
+            (list(sighting_ids),),
+        )
+    finally:
+        cur.close()
 
 
 def test_load_database_url_raises_typed_error_when_env_file_missing(tmp_path, monkeypatch):
@@ -41,6 +57,22 @@ def test_load_database_url_raises_typed_error_when_env_file_missing(tmp_path, mo
     with pytest.raises(SightingStoreError) as exc_info:
         _load_database_url()
     assert exc_info.value.reason == "ENV_FILE_MISSING"
+
+
+def test_sighting_matched_plate_and_confidence_default_to_none():
+    # Pure dataclass check, no DB — plate fields are optional and must
+    # not force every existing Sighting() construction site (which don't
+    # pass them) to start failing.
+    sighting = Sighting(
+        camera_id="cam-1",
+        source_image_path="/tmp/x.jpg",
+        box_xyxy=(0, 0, 10, 10),
+        vehicle_class="car",
+        detection_confidence=0.5,
+        embedding=_make_fake_embedding(),
+    )
+    assert sighting.matched_plate is None
+    assert sighting.plate_confidence is None
 
 
 def test_connection_failure_raises_typed_error():
@@ -84,6 +116,193 @@ def test_save_and_find_similar_round_trip():
     top_match_id = str(results[0][0])
     assert top_match_id == sighting_id
 
+    store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_save_persists_matched_plate_and_confidence_when_provided():
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+
+    real_camera_id = os.environ.get(
+        "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+    )
+
+    sighting = Sighting(
+        camera_id=real_camera_id,
+        source_image_path="/tmp/test_image.jpg",
+        box_xyxy=(10, 20, 100, 200),
+        vehicle_class="car",
+        detection_confidence=0.87,
+        embedding=_make_fake_embedding(),
+        matched_plate="GJ01AB1234",
+        plate_confidence=0.91,
+    )
+
+    sighting_id = store.save(sighting)
+
+    try:
+        cur = store._conn.cursor()
+        cur.execute(
+            "SELECT matched_plate, plate_confidence FROM vehicle_sighting WHERE vehicle_sighting_id = %s",
+            (sighting_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+
+        assert row[0] == "GJ01AB1234"
+        assert row[1] == pytest.approx(0.91)
+    finally:
+        _delete_sightings(store, [sighting_id])
+        store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_save_leaves_matched_plate_null_when_not_provided():
+    # Regression check: a sighting with no plate (the common case today,
+    # since plate reading can legitimately fail) must not break the
+    # existing save() path or insert a placeholder value.
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+
+    real_camera_id = os.environ.get(
+        "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+    )
+
+    sighting = Sighting(
+        camera_id=real_camera_id,
+        source_image_path="/tmp/test_image.jpg",
+        box_xyxy=(10, 20, 100, 200),
+        vehicle_class="car",
+        detection_confidence=0.87,
+        embedding=_make_fake_embedding(),
+    )
+
+    sighting_id = store.save(sighting)
+
+    try:
+        cur = store._conn.cursor()
+        cur.execute(
+            "SELECT matched_plate, plate_confidence FROM vehicle_sighting WHERE vehicle_sighting_id = %s",
+            (sighting_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+
+        assert row[0] is None
+        assert row[1] is None
+    finally:
+        _delete_sightings(store, [sighting_id])
+        store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_find_by_plate_returns_sightings_with_that_exact_plate_chronologically():
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+    real_camera_id = os.environ.get(
+        "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+    )
+    # Unique per run so repeated test runs never collide with a
+    # previous run's leftover rows (a real, confirmed problem: a
+    # hard-coded plate across runs silently inflated this test's own
+    # expected count).
+    unique_plate = f"GJTEST{uuid.uuid4().hex[:6].upper()}"
+    unrelated_plate = f"GJTEST{uuid.uuid4().hex[:6].upper()}"
+    saved_ids = []
+
+    try:
+        # Two sightings of the same plate, saved out of chronological
+        # order, plus one unrelated plate that must not be returned.
+        first_id = store.save(Sighting(
+            camera_id=real_camera_id, source_image_path="/tmp/a.jpg",
+            box_xyxy=(0, 0, 10, 10), vehicle_class="car", detection_confidence=0.9,
+            embedding=_make_fake_embedding(), matched_plate=unique_plate, plate_confidence=0.9,
+        ))
+        saved_ids.append(first_id)
+        second_id = store.save(Sighting(
+            camera_id=real_camera_id, source_image_path="/tmp/b.jpg",
+            box_xyxy=(0, 0, 10, 10), vehicle_class="car", detection_confidence=0.9,
+            embedding=_make_fake_embedding(), matched_plate=unique_plate, plate_confidence=0.9,
+        ))
+        saved_ids.append(second_id)
+        saved_ids.append(store.save(Sighting(
+            camera_id=real_camera_id, source_image_path="/tmp/c.jpg",
+            box_xyxy=(0, 0, 10, 10), vehicle_class="car", detection_confidence=0.9,
+            embedding=_make_fake_embedding(), matched_plate=unrelated_plate, plate_confidence=0.9,
+        )))
+
+        route = store.find_by_plate(unique_plate)
+
+        returned_ids = [r["sighting_id"] for r in route]
+        assert first_id in returned_ids
+        assert second_id in returned_ids
+        assert len(route) == 2
+        # Chronological order, same contract as find_route.
+        detected_times = [r["detected_at"] for r in route]
+        assert detected_times == sorted(detected_times)
+        # Real bug this caught: psycopg2 returns a literal numeric
+        # constant (e.g. `1.0 AS similarity`) as decimal.Decimal, not
+        # float -- and Decimal is not JSON-serializable, which only
+        # surfaced when the API layer tried to return this route in a
+        # response (TypeError: Object of type Decimal is not JSON
+        # serializable). isinstance(x, float) is False for a Decimal, so
+        # this assertion genuinely catches the regression rather than
+        # passing by coincidence.
+        assert isinstance(route[0]["similarity"], float)
+    finally:
+        _delete_sightings(store, saved_ids)
+        store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_find_by_plate_normalizes_hyphens_and_case():
+    # A real, expected input mismatch: an officer types "GJ-01-AB-1234"
+    # or lowercase, while the stored value (from OCR) has no separators
+    # and is uppercase. Both must resolve to the same vehicle.
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+    real_camera_id = os.environ.get(
+        "VEHICLE_DETECTION_TEST_CAMERA_ID", "2ac7d3e2-c1b7-42a8-a588-0acd493db088"
+    )
+    suffix = uuid.uuid4().hex[:4].upper()
+    stored_plate = f"GJ09TS{suffix}"
+    typed_plate = f"gj-09-ts-{suffix.lower()}"
+    saved_ids = []
+
+    try:
+        sighting_id = store.save(Sighting(
+            camera_id=real_camera_id, source_image_path="/tmp/d.jpg",
+            box_xyxy=(0, 0, 10, 10), vehicle_class="car", detection_confidence=0.9,
+            embedding=_make_fake_embedding(), matched_plate=stored_plate, plate_confidence=0.9,
+        ))
+        saved_ids.append(sighting_id)
+
+        route = store.find_by_plate(typed_plate)
+
+        assert len(route) == 1
+        assert route[0]["sighting_id"] == sighting_id
+    finally:
+        _delete_sightings(store, saved_ids)
+        store.close()
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_find_by_plate_returns_empty_list_for_unknown_plate():
+    store = SightingStore(database_url=TEST_DATABASE_URL)
+    route = store.find_by_plate("GJ99ZZ0000")
+    assert route == []
     store.close()
 
 
@@ -393,3 +612,46 @@ def test_find_route_from_anchor_raises_typed_error_for_unknown_camera():
     assert exc_info.value.reason == "ANCHOR_CAMERA_NOT_FOUND"
 
     store.close()
+
+
+def _stop(sid, iso):
+    return {"sighting_id": sid, "detected_at": datetime.datetime.fromisoformat(iso)}
+
+
+def test_merge_routes_keeps_chronological_order_so_last_stop_is_truly_last_seen():
+    # Real bug this caught via the live API: plate stops were prepended to
+    # the photo route, so a 2026-10-10 plate sighting appeared BEFORE
+    # 2026-09-11 photo sightings and the route's last entry reported the
+    # wrong "last seen" camera.
+    plate = [_stop("p1", "2026-10-10T17:00:14+00:00"), _stop("p2", "2026-10-10T17:00:15+00:00")]
+    photo = [_stop("v1", "2026-09-11T09:15:00+00:00"), _stop("v2", "2026-09-11T10:18:00+00:00")]
+
+    merged = merge_routes(plate_route=plate, photo_route=photo)
+
+    assert [s["sighting_id"] for s in merged] == ["v1", "v2", "p1", "p2"]
+    assert merged[-1]["sighting_id"] == "p2"
+
+
+def test_merge_routes_tags_each_stop_with_what_matched_it():
+    plate = [_stop("p1", "2026-10-10T10:00:00+00:00")]
+    photo = [_stop("v1", "2026-10-10T09:00:00+00:00")]
+
+    merged = merge_routes(plate_route=plate, photo_route=photo)
+
+    assert {s["sighting_id"]: s["matched_by"] for s in merged} == {"v1": "photo", "p1": "plate"}
+
+
+def test_merge_routes_dedupes_a_sighting_found_by_both_and_marks_it_as_both():
+    shared_plate = _stop("s1", "2026-10-10T10:00:00+00:00")
+    shared_photo = _stop("s1", "2026-10-10T10:00:00+00:00")
+
+    merged = merge_routes(plate_route=[shared_plate], photo_route=[shared_photo])
+
+    assert len(merged) == 1
+    assert merged[0]["matched_by"] == "photo+plate"
+
+
+def test_merge_routes_with_no_plate_stops_returns_photo_route_unchanged_in_order():
+    photo = [_stop("v1", "2026-10-10T09:00:00+00:00"), _stop("v2", "2026-10-10T10:00:00+00:00")]
+    merged = merge_routes(plate_route=[], photo_route=photo)
+    assert [s["sighting_id"] for s in merged] == ["v1", "v2"]

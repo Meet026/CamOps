@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "vehicle-reid", "src"))
 
 from detector import VehicleDetector, VehicleDetection, DetectorError  # noqa: E402
-from sighting_store import SightingStore, SightingStoreError  # noqa: E402
+from sighting_store import SightingStore, SightingStoreError, merge_routes  # noqa: E402
 from embedder import VehicleEmbedder, EmbedderError  # noqa: E402
 from preprocessing import to_model_input  # noqa: E402
 
@@ -158,16 +158,20 @@ def health():
 
 @app.post("/vehicles/route")
 async def vehicles_route(
-    photo: UploadFile = File(...),
+    photo: UploadFile | None = File(default=None),
+    license_plate: str | None = Form(default=None),
     last_seen_camera_id: str | None = Form(default=None),
     last_seen_at: str | None = Form(default=None),
 ):
     """
-    Accepts one photo. If it's a normal scene, YOLO detects every vehicle
-    in it and each one is treated separately, as before. If YOLO finds
-    ZERO vehicles, this now falls back to treating the WHOLE uploaded
-    image as one already-cropped vehicle and embeds it directly, instead
-    of immediately reporting "no vehicle detected."
+    Accepts a photo and/or a license plate — at least one is required.
+
+    Photo path (unchanged from before plate support was added): if it's
+    a normal scene, YOLO detects every vehicle in it and each one is
+    treated separately. If YOLO finds ZERO vehicles, this falls back to
+    treating the WHOLE uploaded image as one already-cropped vehicle and
+    embeds it directly, instead of immediately reporting "no vehicle
+    detected."
 
     Real bug this fixes: the previous docstring here claimed "raw frame
     or pre-cropped, either works" — that was false, confirmed directly
@@ -186,6 +190,17 @@ async def vehicles_route(
     embedding + similarity search naturally won't find real matches for
     an embedding of, say, an empty street or a person).
 
+    license_plate (new): when given without a photo, skips detection and
+    embedding entirely and looks the vehicle up directly by its matched
+    plate (SightingStore.find_by_plate) — a plate reading is ground truth
+    for identity, so no visual comparison is needed. When given together
+    with a photo, an exact plate match is reported ahead of the visual
+    search results for the same reason: it is stronger evidence than
+    similarity score. Plate reading at ingest time can fail (not every
+    sighting has a legible plate), so most stored sightings still only
+    have an embedding — photo-only search remains the primary path, and
+    this is additive to it, not a replacement.
+
     last_seen_camera_id / last_seen_at (both optional, both required
     together): when an officer knows roughly where and when they last
     actually saw this vehicle, passing both anchors the search to
@@ -196,10 +211,18 @@ async def vehicles_route(
     vehicle at a distant, unrelated camera clearing the similarity
     threshold by coincidence. Omitting both keeps today's existing,
     unconstrained global search exactly as it was — this is a strictly
-    additive capability, not a replacement.
+    additive capability, not a replacement. Only applies to the photo
+    path — a plate lookup is already an exact identity match, so there
+    is no ambiguity for an anchor to resolve.
     """
     if _detector is None or _embedder is None:
         raise HTTPException(status_code=503, detail="Models not yet loaded")
+
+    if photo is None and not license_plate:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide a photo, a license plate, or both",
+        )
 
     if (last_seen_camera_id is None) != (last_seen_at is None):
         raise HTTPException(
@@ -225,6 +248,35 @@ async def vehicles_route(
                 status_code=400,
                 detail="last_seen_at must include a timezone offset (e.g. 2026-10-06T14:30:00+05:30)",
             )
+
+    if photo is None:
+        # Plate-only path: no detection/embedding at all. A plate match
+        # is already an exact identity match, so build the route
+        # directly from find_by_plate.
+        store = SightingStore()
+        try:
+            try:
+                route = store.find_by_plate(license_plate)
+            except SightingStoreError as e:
+                raise HTTPException(status_code=500, detail=f"Plate lookup failed: {e}")
+        finally:
+            store.close()
+
+        for entry in route:
+            entry["sighting_id"] = str(entry["sighting_id"])
+            entry["camera_id"] = str(entry["camera_id"])
+            entry["detected_at"] = entry["detected_at"].isoformat()
+
+        return JSONResponse({
+            "detections": [
+                {
+                    "vehicle_class": route[0]["vehicle_class"] if route else None,
+                    "found_by": "plate",
+                    "route": route,
+                    "anchored_search": False,
+                }
+            ]
+        })
 
     suffix = os.path.splitext(photo.filename or "")[1] or ".jpg"
     try:
@@ -343,6 +395,20 @@ async def vehicles_route(
                 )
                 continue
 
+            # Both photo and plate given: merge both signals into one
+            # chronological route (so its last stop really is the last
+            # place the vehicle was seen), with each stop tagged by what
+            # matched it.
+            found_by = "photo"
+            if license_plate:
+                try:
+                    plate_route = store.find_by_plate(license_plate)
+                except SightingStoreError:
+                    plate_route = []
+                if plate_route:
+                    route = merge_routes(plate_route=plate_route, photo_route=route)
+                    found_by = "photo+plate"
+
             for entry in route:
                 entry["sighting_id"] = str(entry["sighting_id"])
                 entry["camera_id"] = str(entry["camera_id"])
@@ -353,6 +419,7 @@ async def vehicles_route(
                     "vehicle_class": detection.class_name,
                     "detection_confidence": detection.confidence,
                     "used_whole_image_fallback": used_whole_image_fallback,
+                    "found_by": found_by,
                     "route": route,
                     "route_threshold_used": ROUTE_SIMILARITY_THRESHOLD,
                     "anchored_search": anchor_time is not None,

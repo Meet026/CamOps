@@ -14,6 +14,10 @@ interface RawNotificationRow {
   person_name: string;
   plate_number: string;
   crime_details: string;
+  camera_id: string | null;
+  camera_name: string | null;
+  seen_at: Date | null;
+  plate_confidence: number | string | null;
 }
 
 function mapRow(row: RawNotificationRow): WantedListNotificationRecord {
@@ -27,6 +31,11 @@ function mapRow(row: RawNotificationRow): WantedListNotificationRecord {
     personName: row.person_name,
     plateNumber: row.plate_number,
     crimeDetails: row.crime_details,
+    cameraId: row.camera_id ?? null,
+    cameraName: row.camera_name ?? null,
+    seenAt: row.seen_at ?? null,
+    plateConfidence:
+      row.plate_confidence === null || row.plate_confidence === undefined ? null : Number(row.plate_confidence),
   };
 }
 
@@ -36,9 +45,11 @@ const NOTIFICATION_SELECT_SQL = `
   SELECT
     n.notification_id, n.wanted_vehicle_id, n.source, n.matched_plate_number,
     n.is_read, n.created_at,
+    n.camera_id, n.seen_at, n.plate_confidence, c.name AS camera_name,
     wv.person_name, wv.plate_number, wv.crime_details
   FROM wanted_list_notification n
   JOIN wanted_vehicle wv ON wv.wanted_vehicle_id = n.wanted_vehicle_id
+  LEFT JOIN camera c ON c.camera_id = n.camera_id
 `;
 
 @Injectable()
@@ -58,6 +69,33 @@ export class WantedNotificationService {
       VALUES (${wantedVehicleId}::uuid, 'manual_search', ${matchedPlateNumber})
       RETURNING notification_id
     `;
+  }
+
+  // Runs once when a plate is added to the wanted list: alerts on every
+  // camera that read this plate in the last 24h (latest sighting per
+  // camera), catching a vehicle that passed before it was listed.
+  // ON CONFLICT DO NOTHING relies on uq_wanted_notification_sighting, so a
+  // sighting already alerted on is never alerted twice.
+  async createLookbackNotifications(wantedVehicleId: string, plate: string): Promise<number> {
+    const rows = await this.prisma.$queryRaw<{ inserted: number }[]>(Prisma.sql`
+      WITH latest AS (
+        SELECT DISTINCT ON (vs.camera_id)
+          vs.vehicle_sighting_id, vs.camera_id, vs.detected_at, vs.plate_confidence
+        FROM vehicle_sighting vs
+        WHERE vs.matched_plate = ${plate}
+          AND vs.detected_at > now() - interval '24 hours'
+        ORDER BY vs.camera_id, vs.detected_at DESC
+      ), ins AS (
+        INSERT INTO wanted_list_notification
+          (wanted_vehicle_id, source, matched_plate_number, camera_id, vehicle_sighting_id, seen_at, plate_confidence)
+        SELECT ${wantedVehicleId}::uuid, 'camera_lookback', ${plate}, camera_id, vehicle_sighting_id, detected_at, plate_confidence
+        FROM latest
+        ON CONFLICT DO NOTHING
+        RETURNING 1
+      )
+      SELECT count(*)::int AS inserted FROM ins
+    `);
+    return Number(rows[0]?.inserted ?? 0);
   }
 
   async listNotifications(

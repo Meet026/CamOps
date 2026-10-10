@@ -4,5 +4,7 @@
 // silently failed on formatting alone would be a real, install undetected,
 // false negative for something that's supposed to be a matching feature.
 export function normalizePlateNumber(plate: string): string {
-  return plate.trim().toUpperCase().replace(/[\s-]+/g, '');
+  // Letters and digits only — exactly what a camera's plate read contains,
+  // so a wanted entry typed with dots/slashes/underscores still matches.
+  return plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }

@@ -23,4 +23,9 @@ describe('normalizePlateNumber', () => {
     expect(new Set(normalized).size).toBe(1);
     expect(normalized[0]).toBe('GJ01AB1234');
   });
+
+  it('removes every character except letters and digits, matching camera reads', () => {
+    expect(normalizePlateNumber('GJ.01/AB_1234')).toBe('GJ01AB1234');
+    expect(normalizePlateNumber(' gj-01 ab 1234 ')).toBe('GJ01AB1234');
+  });
 });

@@ -60,6 +60,10 @@ describe('WantedNotificationService', () => {
           personName: 'Ramesh Patel',
           plateNumber: 'GJ01AB1234',
           crimeDetails: 'Theft (IPC 379)',
+          cameraId: null,
+          cameraName: null,
+          seenAt: null,
+          plateConfidence: null,
         },
       ]);
     });
@@ -105,6 +109,55 @@ describe('WantedNotificationService', () => {
       await service.markAllRead();
 
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('createLookbackNotifications', () => {
+    it('inserts one camera_lookback row per camera from the last 24h and returns the count', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ inserted: 2 }]);
+
+      await expect(service.createLookbackNotifications('wv-1', 'GJ01AB1234')).resolves.toBe(2);
+
+      const sql = prisma.$queryRaw.mock.calls[0][0];
+      expect(sql.sql).toContain("'camera_lookback'");
+      expect(sql.sql).toContain("interval '24 hours'");
+      expect(sql.sql).toContain('DISTINCT ON');
+      expect(sql.sql).toContain('ON CONFLICT DO NOTHING');
+      expect(sql.values).toEqual(expect.arrayContaining(['wv-1', 'GJ01AB1234']));
+    });
+
+    it('returns 0 when there were no earlier sightings', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ inserted: 0 }]);
+      await expect(service.createLookbackNotifications('wv-1', 'GJ01AB1234')).resolves.toBe(0);
+    });
+  });
+
+  describe('camera fields', () => {
+    it('maps camera, seen time and plate confidence for camera alerts', async () => {
+      const seenAt = new Date('2026-10-10T10:00:00Z');
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { ...fakeRow, source: 'camera_live', camera_id: 'cam-1', camera_name: 'Paldi Circle', seen_at: seenAt, plate_confidence: 0.82 },
+      ]);
+
+      const [n] = await service.listNotifications({ page: 1, limit: 20, unreadOnly: false });
+
+      expect(n).toMatchObject({
+        source: 'camera_live',
+        cameraId: 'cam-1',
+        cameraName: 'Paldi Circle',
+        seenAt,
+        plateConfidence: 0.82,
+      });
+    });
+
+    it('leaves camera fields null for manual searches', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { ...fakeRow, camera_id: null, camera_name: null, seen_at: null, plate_confidence: null },
+      ]);
+
+      const [n] = await service.listNotifications({ page: 1, limit: 20, unreadOnly: false });
+
+      expect(n).toMatchObject({ cameraId: null, cameraName: null, seenAt: null, plateConfidence: null });
     });
   });
 });

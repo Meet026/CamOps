@@ -113,7 +113,7 @@ def test_runs_pipeline_when_frame_differs_significantly(monkeypatch):
         fake_pipeline_result.skipped = []
         pipeline_calls = []
 
-        def fake_run_pipeline(image_paths, camera_id, detector, embedder, store):
+        def fake_run_pipeline(image_paths, camera_id, detector, embedder, store, plate_reader=None):
             pipeline_calls.append(image_paths)
             assert os.path.exists(image_paths[0])  # frame exists WHEN pipeline runs
             return fake_pipeline_result
@@ -166,3 +166,70 @@ def test_returns_stream_not_ready_without_touching_motion_detection(monkeypatch)
         assert result.status == "stream_not_ready"
         assert pipeline_called == []
         assert result.frame is None
+
+
+def test_passes_plate_reader_through_to_pipeline(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        camera = _make_camera_with_segment(tmpdir, segment_name="0.ts", color="black")
+        fake_client = MagicMock()
+        fake_client.ensure_stream_running.return_value = True
+        fake_pipeline_result = MagicMock()
+        fake_pipeline_result.saved_sighting_ids = ["sighting-1"]
+        fake_pipeline_result.skipped = []
+        received = {}
+
+        def fake_run_pipeline(image_paths, camera_id, detector, embedder, store, plate_reader=None):
+            received["plate_reader"] = plate_reader
+            return fake_pipeline_result
+
+        monkeypatch.setattr("src.motion_gated_cycle.run_pipeline", fake_run_pipeline)
+        sentinel_reader = object()
+
+        first = run_motion_gated_cycle(
+            camera=camera, video_stream_client=fake_client, hls_data_dir=tmpdir,
+            detector=MagicMock(), embedder=MagicMock(), store=MagicMock(),
+            previous_frame=None, plate_reader=sentinel_reader,
+        )
+        _real_segment(os.path.join(tmpdir, "cam-1", "1.ts"), color="white")
+        second = run_motion_gated_cycle(
+            camera=camera, video_stream_client=fake_client, hls_data_dir=tmpdir,
+            detector=MagicMock(), embedder=MagicMock(), store=MagicMock(),
+            previous_frame=first.frame, plate_reader=sentinel_reader,
+        )
+
+        assert second.status == "saved"
+        assert received["plate_reader"] is sentinel_reader
+
+
+def test_motion_cycle_hands_saved_plate_reads_to_the_wanted_alerter(monkeypatch):
+    calls = []
+
+    class _Alerter:
+        def handle(self, camera_id, reads):
+            calls.append((camera_id, list(reads)))
+            return 1
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        camera = _make_camera_with_segment(tmpdir, segment_name="0.ts", color="black")
+        fake_client = MagicMock()
+        fake_client.ensure_stream_running.return_value = True
+        result = MagicMock()
+        result.saved_sighting_ids = ["s-1"]
+        result.saved_plate_reads = [("s-1", "GJ01AB1234", 0.9)]
+        result.skipped = []
+        monkeypatch.setattr("src.motion_gated_cycle.run_pipeline", lambda *a, **k: result)
+
+        first = run_motion_gated_cycle(
+            camera=camera, video_stream_client=fake_client, hls_data_dir=tmpdir,
+            detector=MagicMock(), embedder=MagicMock(), store=MagicMock(),
+            previous_frame=None, wanted_alerter=_Alerter(),
+        )
+        _real_segment(os.path.join(tmpdir, "cam-1", "1.ts"), color="white")
+        second = run_motion_gated_cycle(
+            camera=camera, video_stream_client=fake_client, hls_data_dir=tmpdir,
+            detector=MagicMock(), embedder=MagicMock(), store=MagicMock(),
+            previous_frame=first.frame, wanted_alerter=_Alerter(),
+        )
+
+    assert second.status == "saved"
+    assert calls == [("cam-1", [("s-1", "GJ01AB1234", 0.9)])]

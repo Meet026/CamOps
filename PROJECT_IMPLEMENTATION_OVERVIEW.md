@@ -4,7 +4,7 @@
 
 This document explains the entire system end to end: the problem it solves, the three services that make it up, what was implemented in each one, and — most importantly — the reasoning behind the major decisions. It's written to be understood on its own, without needing access to the underlying codebase.
 
-**Current status:** The camera-registry backend is complete (one map feature deliberately postponed). The web app is built and working against that backend. The vehicle-tracking AI system has completed its first two development phases and is functional end-to-end, with a larger-scale model upgrade in progress.
+**Current status (updated 2026-10-11):** The camera-registry backend is complete (one map feature deliberately postponed). The web app is built and working against that backend. The vehicle-tracking AI system is functional end-to-end and now also includes **number-plate reading, search by plate and/or photo, natural-language vehicle search, and live wanted-plate camera alerts** (see Section 5.6). A larger-scale model upgrade is still in progress.
 
 ---
 
@@ -20,7 +20,7 @@ We built three separate systems, in this order, because each one depends on the 
 
 These three run as genuinely separate services (different programming languages and runtimes for each), talking to each other only through a shared database or a stable, well-defined API — never by directly reaching into each other's internals. This was a deliberate choice: it means each piece can be worked on, scaled, or even replaced independently without the others breaking.
 
-**Deliberately left out, by design:** actual live video streaming, recording, or playback; AI video analytics such as facial recognition, license-plate reading, or object detection; integration with other government databases (vehicle registration, criminal records, etc.); a dedicated mobile app. These are all much harder, more sensitive problems that depend on the registry existing first — building them prematurely would have meant guessing at requirements before the foundation was proven, and in the case of facial recognition specifically, would have meant building something with real documented legal and accuracy risk (explained in the next section).
+**Deliberately left out, by design:** video recording or playback (live viewing *was* added later — see Section 5.6); facial recognition; integration with other government databases (vehicle registration, criminal records, etc.); a dedicated mobile app. These are all much harder, more sensitive problems that depend on the registry existing first — building them prematurely would have meant guessing at requirements before the foundation was proven, and in the case of facial recognition specifically, would have meant building something with real documented legal and accuracy risk (explained in the next section).
 
 ---
 
@@ -117,7 +117,11 @@ It was built directly against the real, already-working backend described in the
 | **Health monitoring dashboard** | A dashboard of currently "at-risk" cameras (ones that have gone offline repeatedly), broken down by department | Directly surfaces the automated reachability-checking feature — the single most operationally important backend feature, made visible and actionable |
 | **Audit log viewer** | A searchable, filterable log of every meaningful action taken in the system, including a detailed view of exactly what changed | The compliance and accountability feature — who changed what, and when, for a user base that may need this as evidence |
 | **Settings** | Account details, a password-change form, a light/dark theme toggle, and (for administrators) a user-management screen | Basic self-service account management plus administrative control over who has access |
-| **Vehicle search** | Upload a photo of a vehicle, crop it down to just that vehicle, and see a timeline of where else it's likely been seen across the camera network | The user-facing entry point into the separate vehicle re-identification system described in the next section |
+| **Vehicle search — Trace** | One form: enter a number plate, upload a photo of the vehicle, or both (at least one is required). Results show a **Last seen** card (camera + time), a chronological timeline and map of sightings, a badge on each stop showing whether it was found by plate or by photo, and a banner if the plate is on the wanted list | The user-facing entry point into the vehicle re-identification system. A plate is the fastest, most exact lookup; a photo still works when the plate wasn't readable |
+| **Vehicle search — Describe** | Type a plain-language description (e.g. "white Swift near Visat yesterday") and get matching sightings, ranked, with a route for the top match | For when the officer has a witness description but no plate and no photo |
+| **Wanted list (admin only)** | Add a wanted plate (person + crime details), see active and resolved entries, mark one resolved. Adding a plate also checks the last 24 hours of sightings for it | The list every camera checks plate reads against — managed inside this app, with every add/resolve written to the audit log |
+| **Notification bell** | Shows wanted-plate alerts: which camera saw the plate, when, how confident the plate read was, and a "possible match — verify before acting" label; look-back alerts are marked "seen before it was added" | So an officer learns within seconds that a wanted vehicle passed a camera, without watching any screen |
+| **Live camera view** | Opens a camera's live stream in the browser (HLS); cameras that send H.265/HEVC video are converted on the server so every browser can play them | Lets an officer look at the camera that just raised an alert |
 
 ### 4.3 Notable engineering decisions and the reasoning behind them
 
@@ -168,11 +172,46 @@ It's made up of two parts working together: the actual vehicle-recognition model
 
 ### 5.5 Decisions made along the way, and why
 
-- **License-plate reading was deliberately left out of this phase**, even though the original plan envisioned eventually combining it with visual matching. The database was already designed with a place to store plate information later, but the decision was made to get the visual-matching half working solidly first, rather than building both halves at once and risking neither working well.
+- **License-plate reading was deliberately left out of the first phases**, so the visual-matching half could be made solid first. It has since been added as a second, independent signal alongside visual matching — see Section 5.6.
 - **The web service was built and shipped even though the underlying model is known to be imperfect**, because the specific model file being used and the similarity-strictness threshold are both easily swappable configuration values, never hardcoded into how the web service behaves — so upgrading to a better model later (like the larger one currently being trained) won't require changing the service or the app at all.
 - **The vehicle-search feature in the app deliberately requires the user to upload a photo already cropped down to a single vehicle**, rather than uploading a full scene and having the system guess which vehicle the user means. A full scene can easily contain several vehicles with no way for the system to know which one the officer actually cares about — requiring a focused photo matches how evidence photos are typically already handled in practice, and a more elaborate "detect everything, then let the user pick one" flow was deliberately left as a possible future improvement rather than built prematurely.
 - **The interface is required to never overstate how confident a match is** — it always shows the actual numeric similarity score, always uses careful language like "possible match" rather than "confirmed match," and never claims that a reconstructed route of sightings is complete. This is a direct, deliberate application of the facial-recognition lesson described in Section 2: an imperfect matching system must always show its uncertainty to the human using it, never present a guess as settled fact.
 - **The web service does not yet have its own login/authentication system** — this is a known, openly documented gap, not something quietly overlooked. The planned fix is to have it accept the same login credentials as the main registry system, rather than building an entirely separate account system just for this one feature.
+
+### 5.6 Features added in the latest round (October 2026)
+
+**1. Number-plate reading at ingest.**
+- While camera frames are processed, every detected vehicle crop is also passed to an open-source plate reader (FastALPR, MIT licence). The plate text and its confidence are saved on the same sighting row as the visual fingerprint.
+- A read is kept only if it is a valid Indian plate format (state plates like `GJ01AB1234`, and Bharat-series `22BH1234AA`) **and** its weakest character scores at least 0.6 confidence (configurable via `VEHICLE_INGEST_PLATE_MIN_CONFIDENCE`). A wrong plate is worse than no plate, because plate matches are ranked ahead of visual matches. In testing, the model misread a clean `GJ01AB1234` as `GI11A112` at 0.39 confidence — exactly the kind of read this rule throws away.
+- A failed plate read never blocks ingest: the visual fingerprint is still saved.
+
+**2. Vehicle search by plate and/or photo.**
+- `POST /vehicles/route` now accepts a photo, a `license_plate`, or both. Plate matches and photo matches are merged into one chronological route, and each stop says how it was found (`matched_by`).
+- Plates are cleaned the same way everywhere (upper-case, only letters and digits kept), so `gj-01 ab.1234` and `GJ01AB1234` are the same plate.
+- A database index on `(matched_plate, detected_at)` keeps plate lookups fast as the sightings table grows.
+
+**3. Natural-language vehicle search** (separate `vehicle-search` service, port 8300).
+- `POST /api/v1/search` turns a sentence into structured filters — colour, vehicle type, make, model, plate, location and time range — using a rule-based parser by default (an LLM parser can be switched on via `LLM_PROVIDER`). It then queries the stored sightings, scores and ranks them, and builds a route for the top vehicle.
+- `POST /api/v1/chat` supports follow-up questions ("where did it go after that?") that build on the previous search.
+- **Location is matched by place name, not by distance.** A place such as "SG Highway" or "Vaishnodevi Circle" is mapped to cameras through camera names, addresses and a small built-in landmark list. **A true "within N km of a point" radius search is not implemented yet** (see Section 6).
+
+**4. Wanted-plate camera alerts.**
+- **Wanted list API** (model1-service, admin only): list (active/resolved), add, and resolve wanted plates. A plate can only be active once (409 on a duplicate), and every add/resolve is audited.
+- **Instant updates without polling the database per frame.** Each ingest worker keeps the active wanted list **in memory** and checks every saved plate read against it — a dictionary lookup, cheap enough for 80,000 cameras. When the list changes, a database trigger pushes a `wanted_list_changed` message (PostgreSQL LISTEN/NOTIFY) and every worker reloads. Measured live: a newly added plate was active in a worker within **0.06 s**, and a resolved one dropped out within **0.46 s**. A full refresh every 60 s is a safety net in case a push message is missed, and a dropped database connection is detected and reconnected automatically.
+- **24-hour look-back.** When a plate is added, the last 24 hours of sightings are checked once, and one alert is created per camera that already saw it (`camera_lookback`), marked "seen before it was added".
+- **No alert spam.** The same wanted vehicle on the same camera alerts at most once every 10 minutes, enforced in the database with a per-vehicle-per-camera lock, so both ingest loops reading the same plate at the same instant still give one alert. Ten simultaneous reads produced exactly one alert in testing. A resolved plate never alerts, even if a worker's in-memory list is a few seconds behind.
+- Alerts are stored as rows in the existing notification table, so they survive a restart and show up in the app's notification bell.
+- The ingest service's `/health` endpoint reports how many wanted plates are loaded, alerts created, and the last error.
+
+**5. Ingest and streaming improvements.**
+- **Motion-gated ingest:** camera frames go through the detect → fingerprint → plate pipeline only when the scene has changed, so idle cameras cost almost nothing.
+- **HEVC camera streams:** cameras that send H.265 video are converted to H.264 on the server, so they play in every browser. Each camera's video format is detected in the background and remembered, so opening a stream never waits on that check.
+
+**Verification:** every feature above was tested both through its automated test suite and through the real APIs against the live database (test rows were tagged and deleted afterwards). Latest runs: model1-service 357 tests, vehicle-ingest 73, vehicle-detection 36, video-stream 10, all passing; frontend type-check clean; 26/26 browser checks on the new screens.
+
+**Known limits, stated plainly:**
+- Today's cameras mostly show wide junction views where plates are rarely readable, so most plate matches will come from closer cameras or the look-back.
+- Every alert is a *possible* match from an imperfect plate reader. The app always shows the confidence and asks the officer to verify before acting.
 
 ---
 
@@ -180,10 +219,9 @@ It's made up of two parts working together: the actual vehicle-recognition model
 
 A few things are worth stating plainly, because they represent conscious decisions about what to build later, not things that were simply forgotten:
 
-- **Connecting to the hackathon's live video feed.** The event separately provides a way to connect to a live grid of camera video streams for real-time processing. Nothing in the systems described above connects to that live video feed — and that's intentional. The camera registry was built specifically to manage camera *information*, never to open or process actual video streams; doing so is a substantially different and more complex problem that would belong to a future phase, not something quietly missing from what's already built.
 - **Automatically detecting when two different departments have installed redundant, overlapping camera coverage.** This map feature was fully designed but deliberately set aside so other, higher-priority features could be finished first.
 - **Further hardening of the login/session system** (such as issuing a brand-new session-renewal token every time one is used, and adding a second, database-level layer of department-access enforcement as extra insurance on top of the existing application-level enforcement). The current system is already secure and working well; these are additional layers of defense-in-depth planned for later, not fixes for something broken now.
-- **License-plate reading**, as explained above — the database already has a place reserved for it, but building it wasn't prioritized yet in favor of getting visual vehicle-matching solid first.
+- **Radius search ("vehicles seen within N km of a point").** Natural-language search matches places by name and a landmark list, not by distance from a map point. The cameras already have exact coordinates, so this is a contained addition for later.
 - **A login/authentication system for the vehicle-recognition web service** — a known, openly tracked gap, with a clear plan (reuse the main system's existing login) not yet implemented.
 - **Full self-service password recovery via email.** A secure "change your password while already logged in" flow was built instead, since a traditional email-based reset flow would need verification infrastructure that doesn't exist yet, and skipping that verification step would create a real security risk for this kind of user base.
 

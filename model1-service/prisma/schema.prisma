@@ -187,6 +187,7 @@ model Camera {
 
   statusHistory  CameraStatusHistory[]
   verifications  ScoringVerification[]
+  wantedListNotifications WantedListNotification[]
 
   // Bulk-upload idempotency: re-uploading the same CSV should update the
   // existing row for a given department+name pair rather than duplicate it.
@@ -358,12 +359,21 @@ model WantedListNotification {
 
   wantedVehicleId String @map("wanted_vehicle_id") @db.Uuid
 
-  // NOTE: application-level constraint — currently always 'manual_search'.
-  // Kept as its own column (rather than assumed) so a future automatic
-  // match path can be added without a schema change.
+  // Enforced by DB CHECK wanted_list_notification_source_check — 'manual_search' (officer typed the
+  // plate), 'camera_live' (a camera read it), or 'camera_lookback' (a camera
+  // read it in the 24h before it was added to the wanted list).
   source String
 
   matchedPlateNumber String @map("matched_plate_number")
+
+  // Camera-originated alerts only. vehicle_sighting is owned by the AI
+  // Registry services, not Prisma, so vehicleSightingId has no relation.
+  cameraId          String?   @map("camera_id") @db.Uuid
+  vehicleSightingId String?   @map("vehicle_sighting_id") @db.Uuid
+  seenAt            DateTime? @map("seen_at") @db.Timestamptz
+  plateConfidence   Float?    @map("plate_confidence")
+
+  camera Camera? @relation(fields: [cameraId], references: [cameraId], onDelete: SetNull)
 
   isRead    Boolean  @default(false) @map("is_read")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz

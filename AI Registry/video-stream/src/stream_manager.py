@@ -179,6 +179,10 @@ HLS_LIST_SIZE = "4"
 # decode error a viewer can still report, while blocking every stream
 # start on a probe is a worse failure mode for the common (H.264) case.
 CODEC_PROBE_TIMEOUT_SECONDS = 10.0
+# After a failed probe the camera streams with copy, and the probe isn't
+# retried until this cool-down passes — otherwise an unreachable camera
+# pays the full probe timeout on every visit.
+CODEC_PROBE_RETRY_SECONDS = float(os.environ.get("VIDEO_STREAM_CODEC_PROBE_RETRY", "300"))
 
 
 def _probe_video_codec(rtsp_url: str) -> str | None:
@@ -222,6 +226,11 @@ class StreamManager:
         # with any asyncio event loop policy.
         self._processes: dict[str, subprocess.Popen] = {}
         self._last_access: dict[str, float] = {}
+        # Survives stop()/idle sweeps on purpose: a camera's codec doesn't
+        # change between restarts of its stream, and re-probing costs 3-10s+.
+        self._codec_by_camera: dict[str, str] = {}
+        self._probe_tasks: dict[str, asyncio.Task] = {}
+        self._probe_failed_at: dict[str, float] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._sweep_task: asyncio.Task | None = None
 
@@ -240,12 +249,50 @@ class StreamManager:
         # poll() returns None if the process is still running
         return proc is not None and proc.poll() is None
 
+    def _resolve_codec(self, camera_id: str, authenticated_url: str) -> tuple[bool, str | None]:
+        """
+        Returns (ready, codec). Not ready means a background probe is in
+        flight (or was just started) and the caller should return without
+        starting ffmpeg yet. Ready with codec None means the probe failed
+        recently; the stream starts with copy until the cool-down passes.
+        """
+        codec = self._codec_by_camera.get(camera_id)
+        if codec is not None:
+            return True, codec
+
+        task = self._probe_tasks.get(camera_id)
+        if task is not None:
+            if not task.done():
+                return False, None
+            del self._probe_tasks[camera_id]
+            codec = task.result()
+            if codec is not None:
+                self._codec_by_camera[camera_id] = codec
+                self._probe_failed_at.pop(camera_id, None)
+                return True, codec
+            self._probe_failed_at[camera_id] = time.monotonic()
+            return True, None
+
+        failed_at = self._probe_failed_at.get(camera_id)
+        if failed_at is not None and time.monotonic() - failed_at < CODEC_PROBE_RETRY_SECONDS:
+            return True, None
+
+        self._probe_tasks[camera_id] = asyncio.create_task(
+            asyncio.to_thread(_probe_video_codec, authenticated_url)
+        )
+        return False, None
+
     async def ensure_started(self, camera_id: str, rtsp_url: str) -> None:
         """
         Starts ffmpeg for this camera if it isn't already running.
         Idempotent — safe to call on every request. Uses a per-camera
         lock so two concurrent first-requests for the same camera don't
         race and spawn two ffmpeg processes for it.
+
+        Never waits on the codec probe: if the codec isn't known yet the
+        probe is started in the background and this returns, so the
+        caller serves its usual 503 "starting" response; a later poll
+        starts ffmpeg once the probe has finished.
 
         Uses subprocess.Popen instead of asyncio.create_subprocess_exec
         to avoid the Windows asyncio SelectorEventLoop limitation —
@@ -264,19 +311,22 @@ class StreamManager:
             if self.is_running(camera_id):
                 return
 
+            # Built here, right before use — the credential-bearing URL
+            # never gets stored on self or passed back to any caller;
+            # only this local variable, fed straight into the ffmpeg
+            # argv (and the probe thread) below, ever holds it.
+            authenticated_url = _with_rtsp_credentials(rtsp_url)
+
+            ready, source_codec = self._resolve_codec(camera_id, authenticated_url)
+            if not ready:
+                return
+
             camera_dir = self._camera_dir(camera_id)
             os.makedirs(camera_dir, exist_ok=True)
 
             playlist = os.path.join(camera_dir, "index.m3u8")
             segment_pattern = os.path.join(camera_dir, "%d.ts")
 
-            # Built here, right before use — the credential-bearing URL
-            # never gets stored on self or passed back to any caller;
-            # only this local variable, fed straight into the ffmpeg
-            # argv below, ever holds it.
-            authenticated_url = _with_rtsp_credentials(rtsp_url)
-
-            source_codec = _probe_video_codec(authenticated_url)
             if source_codec == "hevc":
                 # Browser decoders can't play this source untouched —
                 # re-encode to H.264 so every camera is playable

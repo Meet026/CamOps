@@ -25,6 +25,9 @@ from sighting_store import SightingStore, Sighting, SightingStoreError  # noqa: 
 class PipelineResult:
     def __init__(self):
         self.saved_sighting_ids = []
+        # (sighting_id, plate, confidence) for each SAVED sighting that has a
+        # plate — what vehicle-ingest checks against the wanted list.
+        self.saved_plate_reads = []
         self.skipped = []  # list of (description, reason) tuples
 
     def add_saved(self, sighting_id: str):
@@ -40,10 +43,21 @@ def run_pipeline(
     detector: VehicleDetector,
     embedder: VehicleEmbedder,
     store: SightingStore,
+    plate_reader=None,
 ) -> PipelineResult:
     """
-    Runs the full detect -> crop -> embed -> store pipeline over a list of
-    image files, all attributed to one camera_id.
+    Runs the full detect -> crop -> embed -> read_plate -> store pipeline
+    over a list of image files, all attributed to one camera_id.
+
+    plate_reader is an optional callable: crop (PIL.Image) -> (plate_text,
+    confidence) tuple, or None if no plate was found. Omitting it (the
+    default) keeps today's exact behavior — every Sighting is saved with
+    matched_plate=None, plate_confidence=None — so existing callers (e.g.
+    vehicle-ingest's ingest_cycle.py, before it's updated to pass one) are
+    unaffected. A plate_reader that returns None, or raises, is treated
+    the same way an EmbedderError on just the plate signal would be:
+    non-fatal — the embedding-based sighting is still saved, since visual
+    re-identification doesn't depend on a legible plate.
 
     Every per-image and per-detection failure is caught, recorded in the
     result's skipped list with a typed reason, and processing continues —
@@ -75,6 +89,16 @@ def run_pipeline(
                 result.add_skipped(crop_description, f"EMBEDDING_FAILED:{e.reason}")
                 continue
 
+            matched_plate = None
+            plate_confidence = None
+            if plate_reader is not None:
+                try:
+                    plate_result = plate_reader(detection.crop)
+                except Exception:  # noqa: BLE001 -- a plate-reader crash must never cost the embedding-based sighting
+                    plate_result = None
+                if plate_result is not None:
+                    matched_plate, plate_confidence = plate_result
+
             sighting = Sighting(
                 camera_id=camera_id,
                 source_image_path=image_path,
@@ -82,10 +106,14 @@ def run_pipeline(
                 vehicle_class=detection.class_name,
                 detection_confidence=detection.confidence,
                 embedding=embedding,
+                matched_plate=matched_plate,
+                plate_confidence=plate_confidence,
             )
             try:
                 sighting_id = store.save(sighting)
                 result.add_saved(sighting_id)
+                if matched_plate is not None:
+                    result.saved_plate_reads.append((sighting_id, matched_plate, plate_confidence))
             except SightingStoreError as e:
                 result.add_skipped(crop_description, f"STORE_FAILED:{e.reason}")
                 continue

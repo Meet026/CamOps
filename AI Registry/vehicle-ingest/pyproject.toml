@@ -18,6 +18,9 @@ dependencies = [
     "Pillow>=10.4",
     "numpy>=1.26",
     "psycopg2-binary>=2.9",
+    # License plate reading (MIT). CPU path via ONNX Runtime; see
+    # docs/superpowers/specs/2026-10-10-plate-reading-design.md.
+    "fast-alpr[onnx]>=0.4,<0.5",
 ]
 
 [project.optional-dependencies]

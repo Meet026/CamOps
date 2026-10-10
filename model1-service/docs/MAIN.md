@@ -45,6 +45,8 @@ JWT access tokens (15 min) + hashed, revocable refresh tokens (7 days); four-rol
 
 **Built (Phases 1-4):** `prisma`, `common`, `health` (the `/livez` liveness probe — distinct from the `health-monitoring` business module below, kept as a separate directory/class-name specifically to avoid a naming collision), `users`, `auth`
 
+**Built (later):** `wanted-list` — admin-only `GET/POST /wanted-list`, `POST /wanted-list/:id/resolve` (audited, 409 on a duplicate active plate, 24 h sighting look-back on add) plus the existing `check-plate`; notifications now carry camera, time seen and plate confidence for camera alerts (`camera_live` / `camera_lookback` sources). Migrations `20261010120000_wanted_camera_alerts` and `20261010130000_wanted_notification_camera_sources`.
+
 **Built (Phase 5, business modules):** `camera-registry` (+ its `bulk-upload/` and `export/` sub-modules), `scoring` (+ `providers/` — OpenAI-backed, swappable behind an `AiProvider` interface), `storage` (Cloudinary, swappable behind a `StorageProvider` interface), `health-monitoring` (+ `jobs/` — the TCP-reachability cron), `gis` (three of its four endpoints — see below)
 
 **Deferred to a future phase (explicit user decision, not an oversight):** `GET /gis/overlap-detection` — the PRD/LLD already fully specify its query; it's in the v1 acceptance-criteria list but intentionally not built yet. Server-side map-pin clustering was also considered and deferred (frontend/client-side clustering, or a future backend enhancement).
@@ -123,6 +125,9 @@ Structured logging via NestJS's built-in `Logger`, with every request tagged by 
 | 5g. GIS Overlap Detection | — | — | — | **Not started (deferred)** |
 | 6. React Frontend (camera registry) | — | — | Manually verified against a live backend | **Built** |
 | 7. Vehicle Search (frontend + AI Registry) | — | — | Real end-to-end run confirmed (real photo → real detection/embedding → real DB route) | **Built** |
+| 8. Plate + photo vehicle search (Trace) | Pass | — | Plate-only, photo-only and combined searches confirmed via API against live DB | **Built** |
+| 9. Natural-language search (Describe) | — | — | Confirmed via `vehicle-search` API (port 8300); place-name matching only, no N-km radius | **Built** |
+| 10. Wanted list + camera alerts | Pass | Pass | Add→alert in 0.06 s, resolve in 0.46 s, look-back, 10-min dedupe (10 concurrent reads → 1 alert), 409/400/404/401 error paths, audit rows — all confirmed live | **Built** |
 
 **Combined totals as of the last full regression run (2026-08-27):** 38 unit test suites / 225 tests passing, 12 e2e test suites / 45 tests passing (270 tests total). TypeScript compiles cleanly with zero errors (`npx tsc --noEmit -p tsconfig.build.json`).
 
@@ -140,7 +145,7 @@ A separate, sibling project at `../AI Registry/` (not part of this NestJS codeba
 
 **Primary entry point for that project:** [`../../AI Registry/docs/MAIN.md`](../../AI%20Registry/docs/MAIN.md) — its own master doc, with the full chronological build story (why vehicle Re-ID was chosen over facial recognition, every phase's real decisions and bugs, in order). The rest of this section is a quick-reference summary plus the Node-specific half of the cross-project IPv6 bug story that only lives here.
 
-**What it does:** given a photo of one vehicle, reconstruct where else that vehicle was seen — across which registered cameras, in what order — using visual re-identification (not license-plate reading; the model matches on overall vehicle appearance).
+**What it does:** given a photo of a vehicle and/or its number plate, reconstruct where else that vehicle was seen — across which registered cameras, in what order. Visual re-identification matches on overall appearance; plate reads saved at ingest give exact matches when a plate was readable. Wanted plates read by any camera raise an alert in the notification bell.
 
 **Two Python sub-projects:**
 

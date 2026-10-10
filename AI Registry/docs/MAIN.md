@@ -118,6 +118,11 @@ This phase's design decisions, page-by-page spec, and the real design-reference 
 | Phase 2 | Detector + pgvector storage pipeline | Complete |
 | Phase 2 → 3 | HTTP API (`POST /vehicles/route`) | Complete — **no authentication of its own yet, a real flagged gap** |
 | Frontend | Vehicle Search UI (`frontend/src/pages/vehicle-search/`) | Complete |
+| Ingest | Motion-gated frame ingest from live cameras (`vehicle-ingest/`) | Complete |
+| Plate reading | FastALPR plate read on every saved crop; Indian-format + 0.6 confidence gate (`vehicle-ingest/src/plate_reader.py`) | Complete |
+| Plate search | `POST /vehicles/route` accepts photo and/or `license_plate`; merged chronological route with `matched_by` per stop | Complete |
+| Natural-language search | `vehicle-search/` service: `POST /api/v1/search`, `POST /api/v1/chat` (colour/type/make/model/plate/place/time) | Complete — places matched by name/landmark; **N-km radius search not built** |
+| Wanted-plate alerts | In-memory wanted list per ingest worker, LISTEN/NOTIFY push + 60 s refresh, 24 h look-back, 10-min per-camera dedupe (`vehicle-ingest/src/wanted_watcher.py`, `wanted_alerts.py`) | Complete — design: [`docs/superpowers/specs/2026-10-10-wanted-plate-camera-alerts-design.md`](../../docs/superpowers/specs/2026-10-10-wanted-plate-camera-alerts-design.md) |
 
 ## Known Issues
 
@@ -134,6 +139,6 @@ This phase's design decisions, page-by-page spec, and the real design-reference 
 - **Re-test blur robustness with blur augmentation actually wired in** — a real, testable hypothesis from the Known Issues correction above.
 - **Close the vehicle-detection API authentication gap.**
 - **Write Phase 1 and Phase 2 architecture/QA docs**, matching Phase 0's structured format, for anyone auditing this project's build discipline end-to-end.
-- **Video/frame-extraction ingestion** — this entire system is currently images-only; turning a video feed into a steady stream of frames feeding the same detect → embed → store pipeline is a tracked, not-yet-started piece of the roadmap.
-- **ANPR (plate recognition) fusion** — explicitly deferred at the very start of this project (see "Why This Project Exists" above), to be revisited once visual Re-ID is solid.
+- **Radius search** — "seen within N km of this point" for natural-language search (cameras already have coordinates; today places are matched by name).
+- **Plate-reader tuning on real camera footage** — the 0.6 confidence cutoff is provisional; current wide junction views rarely give readable plates.
 - **Route export/save** for the frontend's Vehicle Search results — not built yet, an open product question tracked in [`model1-service/docs/starter/Vehicle-ReID-Frontend-PRD.md`](../../model1-service/docs/starter/Vehicle-ReID-Frontend-PRD.md).

@@ -48,6 +48,8 @@ def run_motion_gated_cycle(
     embedder,
     store,
     previous_frame: np.ndarray | None,
+    plate_reader=None,
+    wanted_alerter=None,
 ) -> MotionGatedCycleResult:
     try:
         is_ready = video_stream_client.ensure_stream_running(camera.camera_id)
@@ -106,13 +108,20 @@ def run_motion_gated_cycle(
             return MotionGatedCycleResult("no_motion", "no significant change since last check", current_frame)
 
         try:
-            result = run_pipeline([frame_path], camera.camera_id, detector, embedder, store)
+            result = run_pipeline(
+                [frame_path], camera.camera_id, detector, embedder, store,
+                plate_reader=plate_reader,
+            )
         except Exception as e:  # noqa: BLE001 — a bad frame must never kill the whole ingest loop
             return MotionGatedCycleResult(
                 "skipped_pipeline_error", f"pipeline raised: {e}", current_frame
             )
         # frame_path is deleted automatically here, on `with` block exit
         # — no raw-frame retention, matching run_one_cycle's own rule.
+
+    if wanted_alerter is not None and result.saved_plate_reads:
+        # Never raises — WantedAlerter swallows and reports its own failures.
+        wanted_alerter.handle(camera.camera_id, result.saved_plate_reads)
 
     if result.saved_sighting_ids:
         return MotionGatedCycleResult(

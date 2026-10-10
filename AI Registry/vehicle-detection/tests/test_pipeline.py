@@ -129,3 +129,100 @@ def test_store_failure_is_recorded_not_raised():
     assert len(result.saved_sighting_ids) == 0
     assert len(result.skipped) == 1
     assert "STORE_FAILED" in result.skipped[0][1]
+
+
+def test_omitting_plate_reader_still_saves_normally():
+    # Regression check: existing callers (e.g. vehicle-ingest's
+    # ingest_cycle.py) that don't pass a plate_reader at all must keep
+    # working exactly as before — plate reading is additive, not
+    # required.
+    detector = FakeDetector([[_fake_detection()]])
+    embedder = FakeEmbedder()
+    store = FakeStore()
+
+    result = run_pipeline(["/fake/image.jpg"], "camera-1", detector, embedder, store)
+
+    assert len(result.saved_sighting_ids) == 1
+    assert store.saved[0].matched_plate is None
+    assert store.saved[0].plate_confidence is None
+
+
+def test_successful_plate_read_is_stored_on_the_sighting():
+    detector = FakeDetector([[_fake_detection()]])
+    embedder = FakeEmbedder()
+    store = FakeStore()
+    plate_reader = lambda crop: ("GJ01AB1234", 0.88)  # noqa: E731
+
+    result = run_pipeline(
+        ["/fake/image.jpg"], "camera-1", detector, embedder, store, plate_reader=plate_reader
+    )
+
+    assert len(result.saved_sighting_ids) == 1
+    assert store.saved[0].matched_plate == "GJ01AB1234"
+    assert store.saved[0].plate_confidence == 0.88
+
+
+def test_plate_reader_returning_none_still_saves_the_sighting():
+    # A real, expected outcome: no legible plate in this crop. The
+    # sighting (with its embedding) must still be saved — plate reading
+    # is one more signal, not a gate on whether the sighting is useful.
+    detector = FakeDetector([[_fake_detection()]])
+    embedder = FakeEmbedder()
+    store = FakeStore()
+    plate_reader = lambda crop: None  # noqa: E731
+
+    result = run_pipeline(
+        ["/fake/image.jpg"], "camera-1", detector, embedder, store, plate_reader=plate_reader
+    )
+
+    assert len(result.saved_sighting_ids) == 1
+    assert len(result.skipped) == 0
+    assert store.saved[0].matched_plate is None
+
+
+def test_plate_reader_raising_does_not_block_saving_the_sighting():
+    # A real, expected failure mode: FastALPR itself raises (a corrupt
+    # crop, a model error). This must be treated the same way an
+    # EmbedderError on just the plate signal would be -- non-fatal,
+    # since the embedding-based sighting is still valid and valuable on
+    # its own.
+    detector = FakeDetector([[_fake_detection()]])
+    embedder = FakeEmbedder()
+    store = FakeStore()
+
+    def _failing_plate_reader(crop):
+        raise RuntimeError("fake ALPR crash")
+
+    result = run_pipeline(
+        ["/fake/image.jpg"], "camera-1", detector, embedder, store,
+        plate_reader=_failing_plate_reader,
+    )
+
+    assert len(result.saved_sighting_ids) == 1
+    assert len(result.skipped) == 0
+    assert store.saved[0].matched_plate is None
+
+
+def test_saved_plate_reads_lists_only_sightings_with_a_plate():
+    # vehicle-ingest checks exactly these reads against the wanted list,
+    # so a sighting without a legible plate must not appear here.
+    detector = FakeDetector([[_fake_detection(), _fake_detection()]])
+    reads = iter([("GJ01AB1234", 0.9), None])
+
+    result = run_pipeline(
+        ["/fake/i.jpg"], "camera-1", detector, FakeEmbedder(), FakeStore(),
+        plate_reader=lambda crop: next(reads),
+    )
+
+    assert result.saved_plate_reads == [("fake-id-0", "GJ01AB1234", 0.9)]
+
+
+def test_saved_plate_reads_excludes_a_plate_whose_sighting_failed_to_save():
+    detector = FakeDetector([[_fake_detection()]])
+
+    result = run_pipeline(
+        ["/fake/i.jpg"], "camera-1", detector, FakeEmbedder(), FakeStore(should_fail=True),
+        plate_reader=lambda crop: ("GJ01AB1234", 0.9),
+    )
+
+    assert result.saved_plate_reads == []

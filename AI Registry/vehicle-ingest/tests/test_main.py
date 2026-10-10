@@ -41,3 +41,26 @@ def test_camera_allowlist_parses_comma_separated_ids(monkeypatch):
     # this same process don't inherit this test's monkeypatched module state.
     monkeypatch.delenv("VEHICLE_INGEST_CAMERA_IDS", raising=False)
     importlib.reload(main_module)
+
+
+@pytest.mark.asyncio
+async def test_health_reports_wanted_alerts_status_when_running():
+    import src.main as main_module
+    alerter = MagicMock()
+    alerter.status.return_value = {"plates": 3, "alerts_created": 1, "last_refresh": None,
+                                   "last_error": None, "last_alert_error": None}
+    transport = ASGITransport(app=main_module.app)
+    with patch.object(main_module, "_wanted_alerter", alerter):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            body = (await client.get("/health")).json()
+    assert body["wanted_alerts"]["plates"] == 3
+
+
+@pytest.mark.asyncio
+async def test_health_says_wanted_alerts_are_disabled_when_not_started():
+    import src.main as main_module
+    transport = ASGITransport(app=main_module.app)
+    with patch.object(main_module, "_wanted_alerter", None):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            body = (await client.get("/health")).json()
+    assert body["wanted_alerts"] == "disabled"

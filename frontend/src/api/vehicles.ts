@@ -72,13 +72,23 @@ export interface VehicleRouteSearchAnchor {
   lastSeenAt: string
 }
 
-export async function searchVehicleRoute(
-  photo: File,
-  anchor?: VehicleRouteSearchAnchor,
-): Promise<VehicleRouteResponse> {
+// At least one of photo / licensePlate is required — the backend returns
+// 400 when both are missing. The anchor only affects the photo search.
+export interface VehicleRouteSearchInput {
+  photo?: File
+  licensePlate?: string
+  anchor?: VehicleRouteSearchAnchor
+}
+
+export async function searchVehicleRoute({
+  photo,
+  licensePlate,
+  anchor,
+}: VehicleRouteSearchInput): Promise<VehicleRouteResponse> {
   const formData = new FormData()
-  formData.append('photo', photo)
-  if (anchor) {
+  if (photo) formData.append('photo', photo)
+  if (licensePlate) formData.append('license_plate', licensePlate)
+  if (photo && anchor) {
     formData.append('last_seen_camera_id', anchor.lastSeenCameraId)
     formData.append('last_seen_at', anchor.lastSeenAt)
   }

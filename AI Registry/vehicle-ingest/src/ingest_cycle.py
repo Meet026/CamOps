@@ -80,6 +80,8 @@ def run_one_cycle(
     detector,
     embedder,
     store,
+    plate_reader=None,
+    wanted_alerter=None,
 ) -> CycleResult:
     try:
         is_ready = video_stream_client.ensure_stream_running(camera.camera_id)
@@ -105,11 +107,18 @@ def run_one_cycle(
             return CycleResult("skipped_no_frame", f"frame extraction failed: {e.reason}")
 
         try:
-            result = run_pipeline([frame_path], camera.camera_id, detector, embedder, store)
+            result = run_pipeline(
+                [frame_path], camera.camera_id, detector, embedder, store,
+                plate_reader=plate_reader,
+            )
         except Exception as e:  # noqa: BLE001 -- a bad frame must never kill the whole ingest loop
             return CycleResult("skipped_pipeline_error", f"pipeline raised: {e}")
         # frame_path is deleted automatically here, on `with` block exit --
         # no raw-frame retention, per this project's Global Constraints.
+
+    if wanted_alerter is not None and result.saved_plate_reads:
+        # Never raises — WantedAlerter swallows and reports its own failures.
+        wanted_alerter.handle(camera.camera_id, result.saved_plate_reads)
 
     if result.saved_sighting_ids:
         return CycleResult("saved", f"{len(result.saved_sighting_ids)} sighting(s) saved")

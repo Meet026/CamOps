@@ -224,6 +224,22 @@ REAL_ANCHOR_CAMERA_ID = os.environ.get(
 )
 
 
+def test_vehicles_route_rejects_when_neither_photo_nor_plate_given():
+    """
+    Pure request-shape check, no database/model access needed: at least
+    one of photo or license_plate must be provided.
+    """
+    from fastapi.testclient import TestClient
+    import api as api_module
+
+    with TestClient(api_module.app) as client:
+        response = client.post("/vehicles/route")
+
+    assert response.status_code == 400
+    assert "photo" in response.json()["detail"]
+    assert "license plate" in response.json()["detail"]
+
+
 def test_vehicles_route_rejects_anchor_camera_without_anchor_time():
     """
     No database or model access needed for this one — the validation
@@ -374,3 +390,56 @@ def test_vehicles_route_runs_anchored_search_when_both_fields_given(monkeypatch)
     car_detections = [d for d in body["detections"] if d.get("vehicle_class") == "car"]
     assert len(car_detections) >= 1
     assert car_detections[0]["anchored_search"] is True
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="requires VEHICLE_DETECTION_TEST_DATABASE_URL — real database test, opt-in only",
+)
+def test_vehicles_route_finds_route_by_plate_alone_no_photo(monkeypatch):
+    """
+    Proves the real wiring end-to-end: no photo at all, no detection/
+    embedding run — a plate-only request looks the vehicle up directly by
+    matched_plate and still returns a chronological route, using the same
+    response shape as the photo path.
+    """
+    monkeypatch.setenv("VEHICLE_DETECTION_TEST_DATABASE_URL", TEST_DATABASE_URL)
+    from fastapi.testclient import TestClient
+    import api as api_module
+    from sighting_store import SightingStore as RealSightingStore, Sighting
+    import numpy as np
+
+    original_init = RealSightingStore.__init__
+
+    def _init_with_test_url(self, database_url=None):
+        original_init(self, database_url=database_url or TEST_DATABASE_URL)
+
+    monkeypatch.setattr(RealSightingStore, "__init__", _init_with_test_url)
+
+    import uuid
+    unique_plate = f"GJAPI{uuid.uuid4().hex[:6].upper()}"
+
+    setup_store = RealSightingStore(database_url=TEST_DATABASE_URL)
+    vec = np.random.rand(512).astype(np.float32)
+    sighting_id = setup_store.save(Sighting(
+        camera_id=REAL_ANCHOR_CAMERA_ID, source_image_path="/tmp/plate_only_test.jpg",
+        box_xyxy=(0, 0, 10, 10), vehicle_class="car", detection_confidence=0.9,
+        embedding=vec / np.linalg.norm(vec), matched_plate=unique_plate, plate_confidence=0.9,
+    ))
+
+    try:
+        with TestClient(api_module.app) as client:
+            response = client.post("/vehicles/route", data={"license_plate": unique_plate})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["detections"]) == 1
+        assert body["detections"][0]["found_by"] == "plate"
+        assert len(body["detections"][0]["route"]) == 1
+        assert body["detections"][0]["route"][0]["sighting_id"] == sighting_id
+        assert body["detections"][0]["route"][0]["camera_id"] == REAL_ANCHOR_CAMERA_ID
+    finally:
+        cur = setup_store._conn.cursor()
+        cur.execute("DELETE FROM vehicle_sighting WHERE vehicle_sighting_id = %s", (sighting_id,))
+        cur.close()
+        setup_store.close()

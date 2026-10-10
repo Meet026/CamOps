@@ -4,6 +4,7 @@ import {
   Map,
   ScrollText,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Activity,
   Search,
@@ -43,6 +44,12 @@ export const NAV_ITEMS: NavItem[] = [
     path: '/vehicle-search',
     icon: Search,
     roles: ['admin', 'field_officer'],
+  },
+  {
+    label: 'Wanted List',
+    path: '/wanted-list',
+    icon: ShieldAlert,
+    roles: ['admin'],
   },
   {
     label: 'Live Stream',

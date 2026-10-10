@@ -87,6 +87,13 @@ def setup_database() -> None:
         ON vehicle_sighting(camera_id);
         """
     )
+    # Wanted-list look-back: "which cameras read this plate in the last 24h".
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_vehicle_sighting_plate_time
+        ON vehicle_sighting (matched_plate, detected_at DESC) WHERE matched_plate IS NOT NULL;
+        """
+    )
     # ivfflat is an APPROXIMATE index — pgvector's own docs note it tunes
     # better once real data exists (lists should scale with row count).
     # lists=100 is a reasonable small-scale default for Phase 2's test

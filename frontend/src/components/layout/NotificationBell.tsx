@@ -105,13 +105,30 @@ export function NotificationBell() {
                 >
                   <div className="flex items-center gap-1.5">
                     <span className="h-1.5 w-1.5 flex-none rounded-full bg-[var(--color-status-offline)]" />
-                    <span className="text-[13px] font-medium">Wanted list match — {n.plateNumber}</span>
+                    <span className="text-[13px] font-medium">
+                      {n.source === 'manual_search' ? 'Wanted list match' : 'Camera spotted wanted plate'} —{' '}
+                      <span className="font-mono">{n.plateNumber}</span>
+                    </span>
                   </div>
                   <p className="pl-3 text-xs text-[var(--text-secondary)]">
                     {n.personName} · {n.crimeDetails}
                   </p>
+                  {n.source !== 'manual_search' && (
+                    <p className="pl-3 text-xs text-[var(--text-primary)]">
+                      {n.cameraName ?? 'Unknown camera'}
+                      {n.seenAt && ` · seen ${formatRelativeTime(n.seenAt)}`}
+                      {n.plateConfidence !== null && ` · read ${Math.round(n.plateConfidence * 100)}% confident`}
+                    </p>
+                  )}
+                  {n.source !== 'manual_search' && (
+                    <p className="pl-3 text-[11px] font-medium text-[var(--color-status-unknown)]">
+                      {n.source === 'camera_lookback'
+                        ? 'Seen before it was added to the list · possible match — verify before acting'
+                        : 'Possible match — verify before acting'}
+                    </p>
+                  )}
                   <p className="pl-3 text-[11px] text-[var(--text-secondary)]">
-                    {formatRelativeTime(n.createdAt)}
+                    {n.source === 'manual_search' ? formatRelativeTime(n.createdAt) : `alerted ${formatRelativeTime(n.createdAt)}`}
                   </p>
                 </button>
               ))}

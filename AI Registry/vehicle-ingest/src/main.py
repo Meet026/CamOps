@@ -19,12 +19,15 @@ from fastapi import FastAPI
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "vehicle-detection", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "vehicle-reid", "src"))
 from detector import VehicleDetector  # noqa: E402
-from sighting_store import SightingStore  # noqa: E402
+from sighting_store import SightingStore, _connect_preferring_ipv4, _load_database_url  # noqa: E402
 from embedder import VehicleEmbedder  # noqa: E402
 
 from src.camera_list_cache import CameraListCache
 from src.ingest_cycle import run_one_cycle
 from src.motion_gated_cycle import run_motion_gated_cycle
+from src.plate_reader import make_plate_reader
+from src.wanted_alerts import WantedAlerter
+from src.wanted_watcher import WantedPlateWatcher, load_active_from_db
 from src.video_stream_client import VideoStreamClient
 
 VIDEO_STREAM_BASE_URL = os.environ.get("VIDEO_STREAM_BASE_URL", "http://127.0.0.1:8100")
@@ -73,6 +76,9 @@ DEFAULT_EMBEDDER_MODEL = os.path.join(
 # camera from GET /cameras is cycled, unchanged from before this existed.
 _CAMERA_ALLOWLIST_RAW = os.environ.get("VEHICLE_INGEST_CAMERA_IDS", "")
 CAMERA_ALLOWLIST = {c.strip() for c in _CAMERA_ALLOWLIST_RAW.split(",") if c.strip()} or None
+PLATE_READING_ENABLED = os.environ.get("VEHICLE_INGEST_PLATE_READING", "1") != "0"
+WANTED_ALERTS_ENABLED = os.environ.get("VEHICLE_INGEST_WANTED_ALERTS", "1") != "0"
+WANTED_LIST_REFRESH_SECONDS = float(os.environ.get("VEHICLE_INGEST_WANTED_REFRESH", "60"))
 
 _video_stream_client: VideoStreamClient | None = None
 _detector: VehicleDetector | None = None
@@ -97,6 +103,41 @@ _last_motion_check_summary: dict = {}
 # restart, which is fine: the very next check for each camera just
 # treats it as a fresh "no previous frame yet" baseline again.
 _last_frame_by_camera: dict = {}
+_plate_reader = None
+_plate_reading_status = "disabled"
+_wanted_watcher: WantedPlateWatcher | None = None
+_wanted_alerter: WantedAlerter | None = None
+
+
+def _db_connect():
+    return _connect_preferring_ipv4(_load_database_url())
+
+
+def _listen_connect():
+    # TCP keepalives: a LISTEN connection that dies without a clean close
+    # (network drop, compute suspend) is otherwise never noticed, and
+    # instant wanted-list updates would silently stop.
+    url = _load_database_url()
+    sep = "&" if "?" in url else "?"
+    return _connect_preferring_ipv4(
+        f"{url}{sep}keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=3"
+    )
+
+
+def _load_plate_reader():
+    """
+    FastALPR downloads its ONNX models on first construction. If that
+    fails, ingest keeps running embedding-only (plates are an additional
+    signal, not a prerequisite) and /health reports why, rather than the
+    whole service refusing to start.
+    """
+    if not PLATE_READING_ENABLED:
+        return None, "disabled"
+    try:
+        from fast_alpr import ALPR
+        return make_plate_reader(ALPR(ocr_device="cpu")), "enabled"
+    except Exception as e:  # noqa: BLE001 -- model load/download failure must not take ingest down
+        return None, f"unavailable: {e}"
 
 
 async def _camera_cycle_loop():
@@ -136,6 +177,8 @@ async def _camera_cycle_loop():
                     detector=_detector,
                     embedder=_embedder,
                     store=store,
+                    plate_reader=_plate_reader,
+                    wanted_alerter=_wanted_alerter,
                 )
                 summary[camera.camera_id] = {
                     "status": store_result.status,
@@ -187,6 +230,8 @@ async def _motion_check_loop():
                     embedder=_embedder,
                     store=store,
                     previous_frame=_last_frame_by_camera.get(camera.camera_id),
+                    plate_reader=_plate_reader,
+                    wanted_alerter=_wanted_alerter,
                 )
                 if result.frame is not None:
                     _last_frame_by_camera[camera.camera_id] = result.frame
@@ -201,10 +246,19 @@ async def _motion_check_loop():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _video_stream_client, _detector, _embedder, _camera_cycle_task, _motion_check_task
-    global _camera_list_cache
+    global _camera_list_cache, _plate_reader, _plate_reading_status, _wanted_watcher, _wanted_alerter
     _video_stream_client = VideoStreamClient(base_url=VIDEO_STREAM_BASE_URL)
     _detector = VehicleDetector()
     _embedder = VehicleEmbedder(DEFAULT_EMBEDDER_MODEL)
+    _plate_reader, _plate_reading_status = _load_plate_reader()
+    if WANTED_ALERTS_ENABLED:
+        _wanted_watcher = WantedPlateWatcher(
+            load_active=lambda conn=None: load_active_from_db(_db_connect, conn),
+            listen_connect=_listen_connect,
+            refresh_seconds=WANTED_LIST_REFRESH_SECONDS,
+        )
+        _wanted_watcher.start()
+        _wanted_alerter = WantedAlerter(_wanted_watcher, connect=_db_connect)
     # TTL matches the slow loop's own cadence -- the camera list changes
     # (a camera added/removed in the registry) far less often than
     # either loop runs, so refreshing at CYCLE_INTERVAL_SECONDS is
@@ -217,6 +271,8 @@ async def _lifespan(app: FastAPI):
     yield
     _camera_cycle_task.cancel()
     _motion_check_task.cancel()
+    if _wanted_watcher is not None:
+        _wanted_watcher.stop()
     _video_stream_client.close()
 
 
@@ -232,6 +288,8 @@ app = FastAPI(
 def health():
     return {
         "status": "ok",
+        "plate_reading": _plate_reading_status,
+        "wanted_alerts": _wanted_alerter.status() if _wanted_alerter is not None else "disabled",
         "last_cycle": _last_cycle_summary,
         "last_motion_check": _last_motion_check_summary,
     }

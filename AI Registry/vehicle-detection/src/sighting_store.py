@@ -131,6 +131,26 @@ def filter_plausible_route(sightings: list[dict], max_speed_kmh: float = MAX_PLA
     return kept
 
 
+def merge_routes(plate_route: list[dict], photo_route: list[dict]) -> list[dict]:
+    """
+    Combines the plate-lookup route and the visual-similarity route for
+    the same vehicle into ONE chronological route, so its last entry is
+    genuinely the last place the vehicle was seen. Each stop is tagged
+    with what matched it ("plate", "photo", or "photo+plate" when both
+    found the same sighting) — the stronger plate evidence stays visible
+    per stop without reordering the route around it.
+    """
+    merged: dict[str, dict] = {}
+    for source, route in (("photo", photo_route), ("plate", plate_route)):
+        for stop in route:
+            existing = merged.get(stop["sighting_id"])
+            if existing is None:
+                merged[stop["sighting_id"]] = {**stop, "matched_by": source}
+            elif existing["matched_by"] != source:
+                existing["matched_by"] = "photo+plate"
+    return sorted(merged.values(), key=lambda s: s["detected_at"])
+
+
 class SightingStoreError(Exception):
     def __init__(self, reason: str, message: str = ""):
         self.reason = reason
@@ -145,6 +165,8 @@ class Sighting:
     vehicle_class: str
     detection_confidence: float
     embedding: np.ndarray
+    matched_plate: str | None = None
+    plate_confidence: float | None = None
 
 
 def _load_database_url() -> str:
@@ -232,8 +254,9 @@ class SightingStore:
                 INSERT INTO vehicle_sighting (
                     camera_id, source_image_path,
                     box_x1, box_y1, box_x2, box_y2,
-                    vehicle_class, detection_confidence, embedding
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    vehicle_class, detection_confidence, embedding,
+                    matched_plate, plate_confidence
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING vehicle_sighting_id;
                 """,
                 (
@@ -243,6 +266,8 @@ class SightingStore:
                     sighting.vehicle_class,
                     sighting.detection_confidence,
                     embedding_list,
+                    sighting.matched_plate,
+                    sighting.plate_confidence,
                 ),
             )
             new_id = cur.fetchone()[0]
@@ -368,6 +393,63 @@ class SightingStore:
             return filter_plausible_route(rows)
         except Exception as e:
             raise SightingStoreError("QUERY_FAILED", f"Route query failed: {e}")
+        finally:
+            cur.close()
+
+    def find_by_plate(self, plate: str, limit: int = 100) -> list:
+        """
+        Returns every sighting whose matched_plate equals the given
+        plate, sorted CHRONOLOGICALLY — same contract and column shape as
+        find_route, so API callers can build a route from either signal
+        without caring which one found the vehicle.
+
+        The plate is normalized the same way vehicle-search's ranker
+        already does (uppercase, strip hyphens/spaces) before comparing,
+        so "GJ-01-AB-1234" and "gj01ab1234" both match a stored
+        "GJ01AB1234" — an officer typing a plate and OCR's own output are
+        unlikely to agree on formatting even when they agree on the
+        plate itself.
+        """
+        normalized_plate = plate.upper().replace("-", "").replace(" ", "")
+        cur = self._conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT
+                    vs.vehicle_sighting_id,
+                    vs.camera_id,
+                    c.name AS camera_name,
+                    ST_Y(c.location_geo::geometry) AS latitude,
+                    ST_X(c.location_geo::geometry) AS longitude,
+                    vs.detected_at,
+                    vs.vehicle_class,
+                    1.0 AS similarity
+                FROM vehicle_sighting vs
+                JOIN camera c ON c.camera_id = vs.camera_id
+                WHERE UPPER(REPLACE(REPLACE(COALESCE(vs.matched_plate, ''), '-', ''), ' ', '')) = %s
+                ORDER BY vs.detected_at ASC
+                LIMIT %s;
+                """,
+                (normalized_plate, limit),
+            )
+            columns = [
+                "sighting_id", "camera_id", "camera_name", "latitude", "longitude",
+                "detected_at", "vehicle_class", "similarity",
+            ]
+            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            for row in rows:
+                # The "similarity" column here is the literal constant
+                # 1.0 (see the query above — a plate match is always
+                # exact), which psycopg2 returns as decimal.Decimal, not
+                # float. Decimal isn't JSON-serializable, unlike
+                # find_route's own similarity (computed via a real
+                # float-producing vector operation) — cast explicitly so
+                # this method's result is safe to return from the API
+                # the same way find_route's already is.
+                row["similarity"] = float(row["similarity"])
+            return rows
+        except Exception as e:
+            raise SightingStoreError("QUERY_FAILED", f"Plate query failed: {e}")
         finally:
             cur.close()
 

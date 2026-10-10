@@ -2,17 +2,22 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { format } from 'date-fns'
-import { Car, MapPin, Search } from 'lucide-react'
+import { format, formatDistanceToNow } from 'date-fns'
+import { Car, Clock, Hash, MapPin, Search, ShieldAlert } from 'lucide-react'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { EmptyState } from '@/components/shared/EmptyState'
-import type { VehicleDetectionResult, VehicleRouteEntry, VehicleRouteResponse } from '@/types/vehicleApi'
+import type { VehicleDetectionResult, VehicleFoundBy, VehicleRouteEntry, VehicleRouteResponse } from '@/types/vehicleApi'
+import type { WantedVehicle } from '@/types/api'
 
 const GUJARAT_CENTER: [number, number] = [22.5, 71.5]
 
 interface LocationState {
   result: VehicleRouteResponse
   photoPreviewUrl: string | null
+  /** Normalized plate the officer searched by, if any. */
+  searchedPlate?: string | null
+  /** Set when the searched plate is on the wanted list. */
+  wantedVehicle?: WantedVehicle | null
   /** Epoch ms when this response was actually produced — see StaleResultNotice. */
   searchedAt?: number
 }
@@ -88,14 +93,38 @@ function band(similarity: number): Band {
   return { band: 'Weak match — review carefully', fg: 'var(--color-status-unknown)', bg: 'var(--color-status-unknown-bg)', raw: '#F59E0B' }
 }
 
+// Plate matches are exact, not scored — they get their own marker colour
+// rather than a similarity band, so a "100%" never stands in for a score.
+const PLATE_MATCH_RAW = '#0EA5E9'
+
+function isPlateMatch(stop: VehicleRouteEntry, foundBy?: VehicleFoundBy): boolean {
+  if (stop.matched_by) return stop.matched_by !== 'photo'
+  return foundBy === 'plate'
+}
+
+function foundByLabel(foundBy?: VehicleFoundBy): string | null {
+  if (foundBy === 'plate') return 'Found by plate'
+  if (foundBy === 'photo+plate') return 'Found by plate + photo'
+  if (foundBy === 'photo') return 'Found by photo'
+  return null
+}
+
 function minutesBetween(a: string, b: string): number {
   return Math.round((new Date(a).getTime() - new Date(b).getTime()) / 60000)
 }
 
+function durationLabel(totalMinutes: number): string {
+  const mins = Math.max(0, totalMinutes)
+  if (mins < 60) return `${mins} min`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return mins % 60 ? `${hours} h ${mins % 60} min` : `${hours} h`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`
+}
+
 function spanLabel(route: VehicleRouteEntry[]): string {
   if (route.length < 2) return '0 min'
-  const mins = minutesBetween(route[route.length - 1].detected_at, route[0].detected_at)
-  return mins + ' min'
+  return durationLabel(minutesBetween(route[route.length - 1].detected_at, route[0].detected_at))
 }
 
 // Vehicle Search Results — pixel-matched to the reference's `at.vresults`
@@ -124,7 +153,7 @@ export function VehicleSearchResultsPage() {
     )
   }
 
-  const { result, photoPreviewUrl } = state
+  const { result, photoPreviewUrl, searchedPlate, wantedVehicle } = state
   const detections = result.detections
 
   if (detections.length === 0) {
@@ -153,8 +182,11 @@ export function VehicleSearchResultsPage() {
       <ResultsHeader
         detection={first}
         photoPreviewUrl={photoPreviewUrl}
+        searchedPlate={searchedPlate ?? null}
         onNewSearch={() => navigate('/vehicle-search')}
       />
+
+      {wantedVehicle && <WantedBanner wantedVehicle={wantedVehicle} />}
 
       <StaleResultNotice
         searchedAt={state.searchedAt}
@@ -173,27 +205,43 @@ export function VehicleSearchResultsPage() {
 
       {detections.length === 1 && primaryRoute.length === 0 && !first.error ? (
         <div className="flex flex-1 items-center justify-center p-10">
-          <EmptyDetail
-            icon={<Search className="h-5 w-5" />}
-            tone="neutral"
-            title={`No past sightings above ${Math.round((first.route_threshold_used ?? 0.8) * 100)}% similarity`}
-            description="The vehicle was read from the photo, but nothing in the sighting database cleared the threshold. This is a normal outcome, not an error."
-            actionLabel="Try another photo"
-            onAction={() => navigate('/vehicle-search')}
-          />
+          {first.found_by === 'plate' ? (
+            <EmptyDetail
+              icon={<Hash className="h-5 w-5" />}
+              tone="neutral"
+              title={`No sightings with plate ${searchedPlate ?? ''}`.trim()}
+              description="Plates are only stored when a camera reads them clearly, which most junction cameras can't do at a distance or at night. Adding a photo searches by appearance instead."
+              actionLabel="Search again with a photo"
+              onAction={() => navigate('/vehicle-search')}
+            />
+          ) : (
+            <EmptyDetail
+              icon={<Search className="h-5 w-5" />}
+              tone="neutral"
+              title={`No past sightings above ${Math.round((first.route_threshold_used ?? 0.8) * 100)}% similarity`}
+              description="The vehicle was read from the photo, but nothing in the sighting database cleared the threshold. This is a normal outcome, not an error."
+              actionLabel="Try another photo"
+              onAction={() => navigate('/vehicle-search')}
+            />
+          )}
         </div>
       ) : (
         <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: 'minmax(340px,40%) 1fr' }}>
           <div className="overflow-auto border-r border-[var(--border-default)] px-[22px] py-5 pb-8">
+            {primaryRoute.length > 0 && <LastSeenCard stop={primaryRoute[primaryRoute.length - 1]} foundBy={first.found_by} />}
             {detections.map((detection, i) => (
               <DetectionGroup key={i} detection={detection} showHeader={showGroupHeaders} />
             ))}
             <p className="text-xs text-[var(--text-secondary)]" style={{ textWrap: 'pretty' }}>
-              Sightings above the current similarity threshold, in time order. Misses are possible — this
-              is not a complete movement history.
+              {first.found_by === 'plate'
+                ? 'Every sighting where this plate was read, in time order.'
+                : first.found_by === 'photo+plate'
+                  ? 'Sightings matched by plate or above the similarity threshold, in time order.'
+                  : 'Sightings above the current similarity threshold, in time order.'}{' '}
+              Misses are possible — this is not a complete movement history.
             </p>
           </div>
-          <RoutePanel route={primaryRoute} />
+          <RoutePanel route={primaryRoute} foundBy={first.found_by} />
         </div>
       )}
     </div>
@@ -215,30 +263,55 @@ function NewSearchButton({ onClick }: { onClick: () => void }) {
 function ResultsHeader({
   detection,
   photoPreviewUrl,
+  searchedPlate,
   onNewSearch,
 }: {
   detection: VehicleDetectionResult
   photoPreviewUrl: string | null
+  searchedPlate: string | null
   onNewSearch: () => void
 }) {
   const thresholdPct = Math.round((detection.route_threshold_used ?? 0.8) * 100)
+  const nothingFound = (detection.route ?? []).length === 0
+  const foundBy = nothingFound && detection.found_by
+    ? foundByLabel(detection.found_by)?.replace('Found by', 'Searched by') ?? null
+    : foundByLabel(detection.found_by)
+  const subtitle =
+    detection.found_by === 'plate'
+      ? 'Exact plate matches only · plates are read automatically and can be missed'
+      : `Showing sightings ≥ ${thresholdPct}% similar · possible matches, not confirmed identifications`
+
   return (
     <div className="flex flex-none flex-wrap items-center gap-4 border-b border-[var(--border-default)] bg-[var(--bg-surface)] px-6 py-4">
       <div className="flex h-12 w-16 flex-none items-center justify-center overflow-hidden rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-sunken)] text-[var(--text-secondary)]">
         {photoPreviewUrl ? (
           <img src={photoPreviewUrl} alt="Searched vehicle" className="h-full w-full object-cover" />
+        ) : searchedPlate ? (
+          <Hash className="h-[18px] w-[18px]" strokeWidth={1.7} />
         ) : (
           <Car className="h-[18px] w-[18px]" strokeWidth={1.5} />
         )}
       </div>
       <div className="min-w-[240px] flex-1 basis-[280px]">
         <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-[15px] font-semibold capitalize">{detection.vehicle_class}</span>
-          <span className="rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
-            {detection.used_whole_image_fallback
-              ? 'used whole photo (no vehicle boundary found)'
-              : `detection ${detection.detection_confidence?.toFixed(2)}`}
-          </span>
+          {searchedPlate && (
+            <span className="rounded-md border border-[var(--border-strong)] bg-[var(--bg-canvas)] px-2 py-0.5 font-mono text-[14px] font-semibold tracking-wide">
+              {searchedPlate}
+            </span>
+          )}
+          <span className="text-[15px] font-semibold capitalize">{detection.vehicle_class ?? 'Vehicle'}</span>
+          {detection.found_by !== 'plate' && detection.used_whole_image_fallback !== undefined && (
+            <span className="rounded-full bg-[var(--bg-surface-sunken)] px-2.5 py-0.5 font-mono text-xs text-[var(--text-secondary)]">
+              {detection.used_whole_image_fallback
+                ? 'used whole photo (no vehicle boundary found)'
+                : `detection ${detection.detection_confidence?.toFixed(2)}`}
+            </span>
+          )}
+          {foundBy && (
+            <span className="rounded-full bg-[var(--color-brand-soft)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-brand)]">
+              {foundBy}
+            </span>
+          )}
           {detection.anchored_search && (
             <span
               title="Narrowed to cameras reachable from the last-seen location/time you provided"
@@ -248,11 +321,46 @@ function ResultsHeader({
             </span>
           )}
         </div>
-        <p className="mt-px text-[12.5px] text-[var(--text-secondary)]">
-          Showing sightings ≥ {thresholdPct}% similar · possible matches, not confirmed identifications
-        </p>
+        <p className="mt-px text-[12.5px] text-[var(--text-secondary)]">{subtitle}</p>
       </div>
       <NewSearchButton onClick={onNewSearch} />
+    </div>
+  )
+}
+
+function WantedBanner({ wantedVehicle }: { wantedVehicle: WantedVehicle }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-status-offline)] bg-[var(--color-status-offline-bg)] px-6 py-3">
+      <span className="flex items-center gap-1.5 rounded-md bg-[var(--color-status-offline)] px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-white">
+        <ShieldAlert className="h-3.5 w-3.5" />
+        Wanted list
+      </span>
+      <span className="font-mono text-[13.5px] font-semibold tracking-wide">{wantedVehicle.plateNumber}</span>
+      <span className="text-[13px] font-medium">{wantedVehicle.personName}</span>
+      <span className="min-w-0 flex-1 text-[12.5px] text-[var(--text-secondary)]">{wantedVehicle.crimeDetails}</span>
+    </div>
+  )
+}
+
+function LastSeenCard({ stop, foundBy }: { stop: VehicleRouteEntry; foundBy?: VehicleFoundBy }) {
+  const seenAt = new Date(stop.detected_at)
+  const byPlate = isPlateMatch(stop, foundBy)
+  return (
+    <div className="mb-5 rounded-[12px] border border-[var(--color-brand-border)] bg-[var(--color-brand-soft)] px-4 py-3.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-brand)]">Last seen</p>
+      <p className="mt-1 flex items-center gap-1.5 text-[16px] font-semibold">
+        <MapPin className="h-4 w-4 flex-none text-[var(--color-brand)]" />
+        {stop.camera_name}
+      </p>
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] text-[var(--text-secondary)]">
+        <Clock className="h-3.5 w-3.5" />
+        <span className="font-medium text-[var(--text-primary)]">
+          {formatDistanceToNow(seenAt, { addSuffix: true })}
+        </span>
+        <span className="font-mono text-[11.5px]">{format(seenAt, 'yyyy-MM-dd HH:mm')}</span>
+        <span>·</span>
+        <span>{byPlate ? 'matched by plate' : `matched by photo, ${Math.round(stop.similarity * 100)}% similar`}</span>
+      </p>
     </div>
   )
 }
@@ -292,11 +400,15 @@ function DetectionGroup({ detection, showHeader }: { detection: VehicleDetection
       )}
 
       {(detection.route ?? []).map((stop, i, arr) => {
-        const b = band(stop.similarity)
+        const byPlate = isPlateMatch(stop, detection.found_by)
+        const b = byPlate
+          ? { band: stop.matched_by === 'photo+plate' ? 'Plate + photo match' : 'Exact plate match', fg: 'var(--color-brand)', bg: 'var(--color-brand-soft)', raw: PLATE_MATCH_RAW }
+          : band(stop.similarity)
         const isSelected = selected === i
         const prev = arr[i - 1]
-        const gap = prev ? '+' + minutesBetween(stop.detected_at, prev.detected_at) + ' min' : 'start'
+        const gap = prev ? '+' + durationLabel(minutesBetween(stop.detected_at, prev.detected_at)) : 'start'
         const pct = Math.round(stop.similarity * 100) + '%'
+        const isLast = i === arr.length - 1
 
         return (
           <div key={stop.sighting_id} className="relative flex cursor-pointer gap-3.5" onClick={() => setSelected(i)}>
@@ -323,18 +435,30 @@ function DetectionGroup({ detection, showHeader }: { detection: VehicleDetection
               >
                 <div className="flex items-start gap-2.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13.5px] font-semibold" style={{ textWrap: 'pretty' }}>
+                    <p className="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold" style={{ textWrap: 'pretty' }}>
                       {stop.camera_name}
+                      {isLast && arr.length > 1 && (
+                        <span className="rounded-full bg-[var(--color-brand-soft)] px-2 py-px text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-brand)]">
+                          Latest
+                        </span>
+                      )}
                     </p>
                     <p className="mt-[3px] font-mono text-xs text-[var(--text-secondary)]">
                       {format(new Date(stop.detected_at), 'yyyy-MM-dd HH:mm:ss')} IST
                     </p>
                   </div>
                   <span
-                    className="flex-none rounded-full px-2.5 py-[3px] text-xs font-semibold"
+                    className="flex flex-none items-center gap-1 rounded-full px-2.5 py-[3px] text-xs font-semibold"
                     style={{ background: b.bg, color: b.fg }}
                   >
-                    {pct}
+                    {byPlate ? (
+                      <>
+                        <Hash className="h-3 w-3" />
+                        Plate
+                      </>
+                    ) : (
+                      pct
+                    )}
                   </span>
                 </div>
                 <div className="mt-[9px] flex items-center gap-2">
@@ -342,7 +466,7 @@ function DetectionGroup({ detection, showHeader }: { detection: VehicleDetection
                     {b.band}
                   </span>
                   <span className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--bg-surface-sunken)]">
-                    <span className="block h-full opacity-75" style={{ width: pct, background: b.fg }} />
+                    {!byPlate && <span className="block h-full opacity-75" style={{ width: pct, background: b.fg }} />}
                   </span>
                   <span className="font-mono text-[11px] text-[var(--text-secondary)]">{gap}</span>
                 </div>
@@ -355,7 +479,7 @@ function DetectionGroup({ detection, showHeader }: { detection: VehicleDetection
   )
 }
 
-function RoutePanel({ route }: { route: VehicleRouteEntry[] }) {
+function RoutePanel({ route, foundBy }: { route: VehicleRouteEntry[]; foundBy?: VehicleFoundBy }) {
   if (route.length === 0) {
     return (
       <div className="relative min-w-0 bg-[var(--bg-surface-raised)]">
@@ -375,12 +499,14 @@ function RoutePanel({ route }: { route: VehicleRouteEntry[] }) {
   }
 
   const span = spanLabel(route)
+  const hasPlateStops = route.some((stop) => isPlateMatch(stop, foundBy))
+  const hasPhotoStops = route.some((stop) => !isPlateMatch(stop, foundBy))
 
   return (
     <div className="relative min-w-0">
       <MapContainer center={GUJARAT_CENTER} zoom={12} className="h-full w-full" style={{ position: 'absolute', inset: 0 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
-        <RouteLayer route={route} />
+        <RouteLayer route={route} foundBy={foundBy} />
       </MapContainer>
 
       <div className="absolute left-4 top-4 z-[1000] rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-glass)] px-3.5 py-[11px] shadow-[var(--shadow-float)] backdrop-blur-[14px]">
@@ -394,8 +520,9 @@ function RoutePanel({ route }: { route: VehicleRouteEntry[] }) {
       </div>
 
       <div className="absolute bottom-4 left-4 z-[1000] rounded-[10px] border border-[var(--border-default)] bg-[var(--bg-glass)] px-[13px] py-2.5 shadow-[var(--shadow-float)] backdrop-blur-[14px]">
-        <LegendRow color="#22C55E" label="Strong match · ≥90%" />
-        <LegendRow color="#A855F7" label="Possible match · 80–89%" />
+        {hasPlateStops && <LegendRow color={PLATE_MATCH_RAW} label="Exact plate match" />}
+        {hasPhotoStops && <LegendRow color="#22C55E" label="Strong match · ≥90%" />}
+        {hasPhotoStops && <LegendRow color="#A855F7" label="Possible match · 80–89%" />}
         <LegendRow color="#5B5FEF" label="Chronological route" />
       </div>
     </div>
@@ -441,7 +568,7 @@ function offsetLatLngForIndex(map: L.Map, lat: number, lng: number, indexAtThisP
 // design's drawRoute() exactly (dash pattern, marker sizing, fitBounds
 // with 0.25 padding) — done imperatively via the Leaflet instance since
 // react-leaflet has no declarative divIcon marker primitive for this.
-function RouteLayer({ route }: { route: VehicleRouteEntry[] }) {
+function RouteLayer({ route, foundBy }: { route: VehicleRouteEntry[]; foundBy?: VehicleFoundBy }) {
   const map = useMap()
 
   useEffect(() => {
@@ -462,17 +589,18 @@ function RouteLayer({ route }: { route: VehicleRouteEntry[] }) {
       seenAtCoordinate.set(coordKey, indexAtThisPoint + 1)
       const [markerLat, markerLng] = offsetLatLngForIndex(map, stop.latitude, stop.longitude, indexAtThisPoint)
 
-      const b = band(stop.similarity)
+      const byPlate = isPlateMatch(stop, foundBy)
+      const markerColor = byPlate ? PLATE_MATCH_RAW : band(stop.similarity).raw
       const size = 24
       const html =
-        `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${b.raw};` +
+        `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${markerColor};` +
         `color:#fff;border:2px solid rgba(255,255,255,.6);box-shadow:0 2px 10px rgba(0,0,0,.45);` +
         `display:flex;align-items:center;justify-content:center;font:600 11px/1 Inter,sans-serif">${i + 1}</div>`
       const marker = L.marker([markerLat, markerLng], {
         icon: L.divIcon({ html, className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] }),
       })
       marker.bindTooltip(
-        `${stop.camera_name} · ${Math.round(stop.similarity * 100)}% · ${format(new Date(stop.detected_at), 'HH:mm:ss')}`,
+        `${stop.camera_name} · ${byPlate ? 'plate match' : Math.round(stop.similarity * 100) + '%'} · ${format(new Date(stop.detected_at), 'HH:mm:ss')}`,
         { direction: 'top', offset: [0, -10] },
       )
       layerGroup.addLayer(marker)
@@ -490,7 +618,7 @@ function RouteLayer({ route }: { route: VehicleRouteEntry[] }) {
     return () => {
       layerGroup.remove()
     }
-  }, [map, route])
+  }, [map, route, foundBy])
 
   return null
 }

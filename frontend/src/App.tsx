@@ -37,6 +37,7 @@ const LiveStreamGridPage = lazy(() =>
 const ScoringQueuePage = lazy(() => import('@/pages/scoring/ScoringQueuePage').then((m) => ({ default: m.ScoringQueuePage })))
 const HealthDashboardPage = lazy(() => import('@/pages/health/HealthDashboardPage').then((m) => ({ default: m.HealthDashboardPage })))
 const AuditLogPage = lazy(() => import('@/pages/audit-log/AuditLogPage').then((m) => ({ default: m.AuditLogPage })))
+const WantedListPage = lazy(() => import('@/pages/wanted-list/WantedListPage').then((m) => ({ default: m.WantedListPage })))
 const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 
 const queryClient = new QueryClient({
@@ -127,6 +128,14 @@ function App() {
                     element={
                       <ProtectedRoute allowedRoles={['admin', 'field_officer']}>
                         <VehicleSearchPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/wanted-list"
+                    element={
+                      <ProtectedRoute allowedRoles={['admin']}>
+                        <WantedListPage />
                       </ProtectedRoute>
                     }
                   />

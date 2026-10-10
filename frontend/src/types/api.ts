@@ -261,6 +261,10 @@ export interface WantedVehicle {
   resolvedAt: string | null;
 }
 
+// POST /wanted-list response: the new entry plus how many earlier camera
+// sightings (last 24h) the look-back alerted on.
+export type CreatedWantedVehicle = WantedVehicle & { lookbackAlerts: number | null };
+
 export interface CheckPlateResult {
   matched: boolean;
   wantedVehicle: WantedVehicle | null;
@@ -269,11 +273,18 @@ export interface CheckPlateResult {
 export interface WantedListNotification {
   notificationId: string;
   wantedVehicleId: string;
-  source: 'manual_search';
+  // manual_search: an officer typed the plate. camera_live: a camera read it.
+  // camera_lookback: a camera read it in the 24h before it was added.
+  source: 'manual_search' | 'camera_live' | 'camera_lookback';
   matchedPlateNumber: string;
   isRead: boolean;
   createdAt: string;
   personName: string;
   plateNumber: string;
   crimeDetails: string;
+  // Camera alerts only; null for manual_search.
+  cameraId: string | null;
+  cameraName: string | null;
+  seenAt: string | null;
+  plateConfidence: number | null;
 }
